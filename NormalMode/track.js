@@ -109,7 +109,7 @@ async function startTracking() {
 // Format message in HTML with link to etherscan
 const etherscanUrl = `https://etherscan.io/tx/${tx.hash}`;
 const message = `🚀 New Deposit Found ✅\n
-From: <code>${shortFrom} (${getTagForAddress(tx.from)})</code>\n
+From: <code>${shortFrom} (${getTagForAddress(tx.from)})</code>
 To: <code>${shortTo}</code>\n
 💲Amount: <code>${amountInEth} ETH</code>
 🔗 Hash: <a href="${etherscanUrl}">${tx.hash}</a>`;
