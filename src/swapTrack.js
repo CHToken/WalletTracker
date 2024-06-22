@@ -26,7 +26,7 @@ async function importChalk() {
 // Function to display bot running message
 async function displayBotRunning() {
   const chalk = await importChalk();
-  console.log(chalk.green("Bot is running..."));
+  console.log(chalk.yellow("Starting Swap tracking..."));
 }
 
 // Function to convert wei to ETH manually (using 18 decimal places)
