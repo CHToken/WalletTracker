@@ -1,9 +1,15 @@
 // index.js
+require('dotenv').config();
+const { startTrackingDeposits } = require('./src/track');
+const { SwapTrack } = require('./src/swapTrack');
 
-// Requiring the bit.js file from the bitqueryMode folder
-const { trackDeposits } = require('./bitqueryMode/bit');
-
-// Call the function to start tracking
-trackDeposits();
-
-console.log('Tracking started for...', new Date());
+(async () => {
+  try {
+    // Start tracking deposits
+    await startTrackingDeposits();
+    // Start tracking swaps
+    await SwapTrack();
+  } catch (error) {
+    console.error("Failed to start tracking:", error);
+  }
+})();

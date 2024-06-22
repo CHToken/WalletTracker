@@ -1,18 +1,20 @@
+// track.js
 require("dotenv").config();
 const { ethers } = require("ethers");
 const fs = require("fs");
 const path = require("path");
 const TelegramBot = require("node-telegram-bot-api");
+const { MongoClient } = require("mongodb");
 
 // Construct the absolute path to config.json
 const configPath = path.join(__dirname, "config.json");
-
-// Load configuration from config.json
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 
-// Telegram Bot token from .env file
+// Environment variables
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
+const TELEGRAM_DEPOSIT_CHANNEL_ID = process.env.TELEGRAM_DEPOSIT_CHANNEL_ID;
+const MONGODB_URL = process.env.MONGODB_URL;
+const INFURA_URL = process.env.INFURA_URL;
 
 // Initialize Telegram Bot
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
@@ -40,21 +42,46 @@ function getTagForAddress(address) {
 }
 
 // Function to send notification to Telegram
-function sendTelegramMessage(message) {
-  bot.sendMessage(TELEGRAM_CHANNEL_ID, message, { parse_mode: "HTML" }).catch((error) => {
+async function sendTelegramMessage(message, channelID) {
+  try {
+    await bot.sendMessage(channelID, message, { parse_mode: "HTML" });
+  } catch (error) {
     console.error("Error sending Telegram message:", error.message);
-  });
+  }
 }
 
-// Function to start tracking deposits
-async function startTracking() {
-  const provider = ethers.getDefaultProvider(process.env.INFURA_URL);
-  // Convert all exchangeWallets to lowercase
-  const exchangeWallets = config.exchangeWallets.map((wallet) =>
-    wallet.address.toLowerCase()
-  );
+// Function to store the transaction details in MongoDB
+async function storeTransactionInDB(tx, collectionName) {
+  const client = new MongoClient(MONGODB_URL);
+  try {
+    await client.connect();
+    const database = client.db("blockchain");
+    const collection = database.collection(collectionName);
 
-  // Dynamic import for chalk
+    // Check if the deposit address already exists in DepositAddresses
+    const depositAddressCollection = database.collection("DepositAddresses");
+    const existingAddress = await depositAddressCollection.findOne({ address: tx.to });
+    
+    if (!existingAddress) {
+      // If address doesn't exist, insert it into DepositAddresses
+      await depositAddressCollection.insertOne({ address: tx.to });
+    }
+
+    // Insert transaction into DepositTransactions
+    const result = await collection.insertOne(tx);
+    console.log("Transaction stored in MongoDB with _id:", result.insertedId);
+  } catch (error) {
+    console.error("Error storing transaction in MongoDB:", error.message);
+  } finally {
+    await client.close();
+  }
+}
+
+// Function to track ETH deposits using the method from old code
+async function startTrackingDeposits() {
+  const provider = ethers.getDefaultProvider(INFURA_URL);
+  const exchangeWallets = config.exchangeWallets.map((wallet) => wallet.address.toLowerCase());
+
   let chalk;
   try {
     chalk = (await import("chalk")).default;
@@ -64,38 +91,21 @@ async function startTracking() {
     return;
   }
 
-  // Use once method instead of on to handle events
-  provider.once("block", async (blockNumber) => {
+  const handleBlock = async (blockNumber) => {
     console.log(chalk.cyan(`New block received: ${blockNumber}`));
 
     try {
       const block = await provider.getBlock(blockNumber);
       if (block && block.transactions.length > 0) {
-        console.log(
-          chalk.green(
-            `Block ${blockNumber} has ${block.transactions.length} transactions.`
-          )
-        );
-        // Flag to track if any outgoing transactions from exchange wallets are found
+        console.log(chalk.green(`Block ${blockNumber} has ${block.transactions.length} transactions.`));
         let foundTransactions = false;
         for (const txHash of block.transactions) {
           try {
             const tx = await provider.getTransaction(txHash);
-            // Ensure tx and tx.from exist and tx.from is not null before processing
-            if (
-              tx &&
-              tx.from &&
-              exchangeWallets.includes(tx.from.toLowerCase())
-            ) {
+            if (tx && tx.from && exchangeWallets.includes(tx.from.toLowerCase())) {
               const shortFrom = shortenAddress(tx.from);
               const shortTo = shortenAddress(tx.to);
-              console.log(
-                chalk.blue(
-                  `Outgoing transaction from exchange wallet ${shortFrom} (${getTagForAddress(
-                    tx.from
-                  )}) to ${shortTo}:`
-                )
-              );
+              console.log(chalk.blue(`Outgoing transaction from exchange wallet ${shortFrom} (${getTagForAddress(tx.from)}) to ${shortTo}:`));
 
               if (tx.value !== undefined) {
                 const amountInWei = parseInt(tx.value);
@@ -106,14 +116,22 @@ async function startTracking() {
                   console.log(chalk.yellow("---"));
                   foundTransactions = true;
 
-// Format message in HTML with link to etherscan
-const etherscanUrl = `https://etherscan.io/tx/${tx.hash}`;
-const message = `🚀 New Deposit Found ✅\n
+                  const etherscanUrl = `https://etherscan.io/tx/${tx.hash}`;
+                  const message = `🚀 New Deposit Found ✅\n
 From: <code>${shortFrom} (${getTagForAddress(tx.from)})</code>
 To: <code>${shortTo}</code>\n
 💲Amount: <code>${amountInEth} ETH</code>
 🔗 Hash: <a href="${etherscanUrl}">${tx.hash}</a>`;
-                  sendTelegramMessage(message);
+                  await sendTelegramMessage(message, TELEGRAM_DEPOSIT_CHANNEL_ID);
+
+                  // Store transaction in MongoDB
+                  await storeTransactionInDB({
+                    from: tx.from,
+                    to: tx.to,
+                    amountInEth,
+                    hash: tx.hash,
+                    timestamp: new Date()
+                  }, "DepositTransactions");
                 }
               } else {
                 console.log(chalk.white(`Amount: 0 wei`));
@@ -123,49 +141,42 @@ To: <code>${shortTo}</code>\n
               }
             }
           } catch (error) {
-            console.error(
-              chalk.red(`Error processing transaction ${txHash}:`),
-              error.message
-            );
+            console.error(chalk.red(`Error processing transaction ${txHash}:`), error.message);
           }
         }
 
         if (!foundTransactions) {
-          console.log(
-            chalk.yellow(
-              "No outgoing transactions found from exchange wallets in this block."
-            )
-          );
+          console.log(chalk.yellow("No outgoing transactions found from exchange wallets in this block."));
         }
       } else {
         console.log(chalk.green(`Block ${blockNumber} has no transactions.`));
       }
     } catch (error) {
-      console.error(
-        chalk.red(`Error processing block ${blockNumber}:`),
-        error.message
-      );
+      console.error(chalk.red(`Error processing block ${blockNumber}:`), error.message);
     }
 
-    // Restart tracking by calling startTracking recursively with proper error handling
-    startTracking().catch((error) => {
+    try {
+      await startTrackingDeposits();
+    } catch (error) {
       console.error(chalk.red("Error in deposit tracking:"), error);
-    });
-  });
+    }
+  };
 
-  // Handle provider errors
+  provider.once("block", handleBlock);
+
   provider.on("error", (error) => {
     console.error(chalk.red("Provider error:"), error);
   });
 
-  // Handle script termination
-  process.on("SIGINT", () => {
+  const handleSigint = () => {
     console.log(chalk.yellow("SIGINT received. Stopping deposit tracking."));
+    provider.removeListener("block", handleBlock);
     process.exit(0);
-  });
+  };
+
+  process.once("SIGINT", handleSigint);
 }
 
-// Call startTracking function after chalk is loaded
-startTracking().catch((error) => {
-  console.error("Failed to start tracking:", error);
-});
+module.exports = {
+  startTrackingDeposits
+};
