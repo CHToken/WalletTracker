@@ -5,7 +5,7 @@ const TelegramBot = require("node-telegram-bot-api");
 dotenv.config();
 
 // Set up Infura provider
-const infuraUrl = process.env.INFURA_URL;
+const infuraUrl = process.env.SWAP_INFURA_URL;
 const provider = new ethers.getDefaultProvider(infuraUrl);
 
 // Telegram bot setup
@@ -121,6 +121,9 @@ async function SwapTrack() {
               console.error(chalk.red(`Error processing transaction ${txHash}:`), error.message);
             }
           }
+
+          // Indicate progress after scanning each block
+          console.log(chalk.blue(`Finished scanning block ${blockNumber}.`));
         } else {
           console.log(chalk.cyan(`Block ${blockNumber} has no transactions.`));
         }

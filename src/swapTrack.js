@@ -121,6 +121,9 @@ async function SwapTrack() {
               console.error(chalk.red(`Error processing transaction ${txHash}:`), error.message);
             }
           }
+
+          // Indicate progress after scanning each block
+          console.log(chalk.blue(`Finished scanning block ${blockNumber}.`));
         } else {
           console.log(chalk.cyan(`Block ${blockNumber} has no transactions.`));
         }
