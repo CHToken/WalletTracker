@@ -1,79 +1,183 @@
-// {
-//         Log {
-//           provider: JsonRpcProvider {},
-//           transactionHash: '0xb3f741003a1ef88f3de2a48b914b501bd3e0217b095041f07fee8b6cdae5931f',
-//           blockHash: '0x149a552176443699b940e7b158b136b66da385c00a3b9613d37d65ef5228dd3a',
-//           blockNumber: 20144266,
-//           removed: undefined,
-//           address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-//           data: '0x000000000000000000000000000000000000000000000000016345785d8a0000',
-//           topics: [
-//             '0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c',
-//             '0x0000000000000000000000007a250d5630b4cf539739df2c5dacb4c659f2488d'
-//           ],
-//           index: 12,
-//           transactionIndex: 1
-//         },
-//         Log {
-//           provider: JsonRpcProvider {},
-//           transactionHash: '0xb3f741003a1ef88f3de2a48b914b501bd3e0217b095041f07fee8b6cdae5931f',
-//           blockHash: '0x149a552176443699b940e7b158b136b66da385c00a3b9613d37d65ef5228dd3a',
-//           blockNumber: 20144266,
-//           removed: undefined,
-//           address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-//           data: '0x000000000000000000000000000000000000000000000000016345785d8a0000',
-//           topics: [
-//             '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',
-//             '0x0000000000000000000000007a250d5630b4cf539739df2c5dacb4c659f2488d',
-//             '0x00000000000000000000000083b88e78aabf4a72f4df9708c5ca1721a9ec43c0'
-//           ],
-//           index: 13,
-//           transactionIndex: 1
-//         },
-//         Log {
-//           provider: JsonRpcProvider {},
-//           transactionHash: '0xb3f741003a1ef88f3de2a48b914b501bd3e0217b095041f07fee8b6cdae5931f',
-//           blockHash: '0x149a552176443699b940e7b158b136b66da385c00a3b9613d37d65ef5228dd3a',
-//           blockNumber: 20144266,
-//           removed: undefined,
-//           address: '0x5108F417288F87E8bD39786029b23f9F245f315a',
-//           data: '0x000000000000000000000000000000000000000000000000146eefcb0cceb011',
-//           topics: [
-//             '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',
-//             '0x00000000000000000000000083b88e78aabf4a72f4df9708c5ca1721a9ec43c0',
-//             '0x000000000000000000000000732c8193868f7453833ac2089699fd0120bb2586'
-//           ],
-//           index: 14,
-//           transactionIndex: 1
-//         },
-//         Log {
-//           provider: JsonRpcProvider {},
-//           transactionHash: '0xb3f741003a1ef88f3de2a48b914b501bd3e0217b095041f07fee8b6cdae5931f',
-//           blockHash: '0x149a552176443699b940e7b158b136b66da385c00a3b9613d37d65ef5228dd3a',
-//           blockNumber: 20144266,
-//           removed: undefined,
-//           address: '0x83B88E78AaBF4a72f4dF9708C5CA1721A9EC43c0',
-//           data: '0x000000000000000000000000000000000000000000000003d5cce35990e9e36000000000000000000000000000000000000000000000000043de77b9c909463b',
-//           topics: [
-//             '0x1c411e9a96e071241c2f21f7726b17ae89e3cab4c78be50e062b03a9fffbbad1'
-//           ],
-//           index: 15,
-//           transactionIndex: 1
-//         },
-//         Log {
-//           provider: JsonRpcProvider {},
-//           transactionHash: '0xb3f741003a1ef88f3de2a48b914b501bd3e0217b095041f07fee8b6cdae5931f',
-//           blockHash: '0x149a552176443699b940e7b158b136b66da385c00a3b9613d37d65ef5228dd3a',
-//           blockNumber: 20144266,
-//           removed: undefined,
-//           address: '0x83B88E78AaBF4a72f4dF9708C5CA1721A9EC43c0',
-//           data: '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000016345785d8a0000000000000000000000000000000000000000000000000000146eefcb0cceb0110000000000000000000000000000000000000000000000000000000000000000',
-//           topics: [
-//             '0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822',
-//             '0x0000000000000000000000007a250d5630b4cf539739df2c5dacb4c659f2488d',
-//             '0x000000000000000000000000732c8193868f7453833ac2089699fd0120bb2586'
-//           ],
-//           index: 16,
-//           transactionIndex: 1
-//         }
-// }
+require("dotenv").config();
+const { ethers } = require("ethers");
+const fs = require("fs");
+const path = require("path");
+const TelegramBot = require("node-telegram-bot-api");
+const { MongoClient } = require("mongodb");
+
+// Construct the absolute path to config.json
+const configPath = path.join(__dirname, "./src/config.json");
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+
+// Environment variables
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_DEPOSIT_CHANNEL_ID = process.env.TELEGRAM_DEPOSIT_CHANNEL_ID;
+const MONGODB_URL = process.env.MONGODB_URL;
+const INFURA_URL = process.env.INFURA_URL;
+
+// Initialize Telegram Bot
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
+
+// Function to shorten an Ethereum address for display
+function shortenAddress(address) {
+  if (address.length <= 10) return address;
+  return (
+    address.substring(0, 6) + "..." + address.substring(address.length - 4)
+  );
+}
+
+// Function to convert wei to ETH manually (using 18 decimal places)
+function weiToEth(weiAmount) {
+  const ethAmount = weiAmount / Math.pow(10, 18);
+  return parseFloat(ethAmount.toFixed(6));
+}
+
+// Function to get tag associated with an address
+function getTagForAddress(address) {
+  const wallet = config.exchangeWallets.find(
+    (wallet) => wallet.address.toLowerCase() === address.toLowerCase()
+  );
+  return wallet ? wallet.tag : "";
+}
+
+// Function to send notification to Telegram
+async function sendTelegramMessage(message, channelID) {
+  try {
+    await bot.sendMessage(channelID, message, { parse_mode: "HTML" });
+  } catch (error) {
+    console.error("Error sending Telegram message:", error.message);
+  }
+}
+
+// Function to store the transaction details in MongoDB
+async function storeTransactionInDB(tx, collectionName) {
+  const client = new MongoClient(MONGODB_URL);
+  try {
+    await client.connect();
+    const database = client.db("blockchain");
+    const collection = database.collection(collectionName);
+
+    // Check if the deposit address already exists in DepositAddresses
+    const depositAddressCollection = database.collection("DepositAddresses");
+    const existingAddress = await depositAddressCollection.findOne({ address: tx.to });
+    
+    if (!existingAddress) {
+      // If address doesn't exist, insert it into DepositAddresses
+      await depositAddressCollection.insertOne({ address: tx.to });
+    }
+
+    // Insert transaction into DepositTransactions
+    const result = await collection.insertOne(tx);
+    console.log("Transaction stored in MongoDB with _id:", result.insertedId);
+  } catch (error) {
+    console.error("Error storing transaction in MongoDB:", error.message);
+  } finally {
+    await client.close();
+  }
+}
+
+// Function to track ETH deposits using the method from old code
+async function startTrackingDeposits() {
+    const provider = ethers.getDefaultProvider(INFURA_URL);
+    const exchangeWallets = config.exchangeWallets.map((wallet) => wallet.address.toLowerCase());
+  
+    let chalk;
+    try {
+      chalk = (await import("chalk")).default;
+      console.log(chalk.yellow("Starting deposit tracking..."));
+    } catch (error) {
+      console.error("Failed to load chalk:", error);
+      return;
+    }
+  
+    // Cache for already processed blocks to avoid redundant API calls
+    const processedBlocks = new Set();
+  
+    const handleBlock = async (blockNumber) => {
+      if (processedBlocks.has(blockNumber)) {
+        return; // Skip already processed blocks
+      }
+  
+      processedBlocks.add(blockNumber);
+      console.log(chalk.cyan(`New block received: ${blockNumber}`));
+  
+      try {
+        const block = await provider.getBlock(blockNumber);
+        if (block && block.transactions.length > 0) {
+          console.log(chalk.green(`Block ${blockNumber} has ${block.transactions.length} transactions.`));
+          let foundTransactions = false;
+  
+          for (const txHash of block.transactions) {
+            try {
+              const tx = await provider.getTransaction(txHash);
+              if (tx && tx.from && exchangeWallets.includes(tx.from.toLowerCase())) {
+                const shortFrom = shortenAddress(tx.from);
+                const shortTo = shortenAddress(tx.to);
+                console.log(chalk.blue(`Outgoing transaction from exchange wallet ${shortFrom} (${getTagForAddress(tx.from)}) to ${shortTo}:`));
+  
+                if (tx.value !== undefined) {
+                  const amountInWei = parseInt(tx.value);
+                  if (amountInWei > 0) {
+                    const amountInEth = weiToEth(amountInWei);
+                    console.log(chalk.white(`Amount: ${amountInEth} ETH`));
+                    console.log(chalk.gray(`Transaction Hash: ${tx.hash}`));
+                    console.log(chalk.yellow("---"));
+                    foundTransactions = true;
+  
+                    const etherscanUrl = `https://etherscan.io/tx/${tx.hash}`;
+                    const message = `🚀 New Deposit Found ✅\n
+  From: <code>${shortFrom} (${getTagForAddress(tx.from)})</code>
+  To: <code>${shortTo}</code>\n
+  💲Amount: <code>${amountInEth} ETH</code>
+  🔗 Hash: <a href="${etherscanUrl}">${tx.hash}</a>`;
+                    await sendTelegramMessage(message, TELEGRAM_DEPOSIT_CHANNEL_ID);
+  
+                    // Store transaction in MongoDB
+                    await storeTransactionInDB({
+                      from: tx.from,
+                      to: tx.to,
+                      amountInEth,
+                      hash: tx.hash,
+                      timestamp: new Date()
+                    }, "DepositTransactions");
+                  }
+                } else {
+                  console.log(chalk.white(`Amount: 0 wei`));
+                  console.log(chalk.gray(`Transaction Hash: ${tx.hash}`));
+                  console.log(chalk.yellow("---"));
+                  foundTransactions = true;
+                }
+              }
+            } catch (error) {
+              console.error(chalk.red(`Error processing transaction ${txHash}:`), error.message);
+            }
+          }
+  
+          if (!foundTransactions) {
+            console.log(chalk.yellow("No outgoing transactions found from exchange wallets in this block."));
+          }
+        } else {
+          console.log(chalk.green(`Block ${blockNumber} has no transactions.`));
+        }
+      } catch (error) {
+        console.error(chalk.red(`Error processing block ${blockNumber}:`), error.message);
+      }
+    };
+  
+    provider.on("block", handleBlock);
+  
+    provider.on("error", (error) => {
+      console.error(chalk.red("Provider error:"), error);
+    });
+  
+    const handleSigint = () => {
+      console.log(chalk.yellow("SIGINT received. Stopping deposit tracking."));
+      provider.removeListener("block", handleBlock);
+      process.exit(0);
+    };
+  
+    process.once("SIGINT", handleSigint);
+  }  
+
+// Uncomment this line if you want to start tracking deposits immediately
+startTrackingDeposits();

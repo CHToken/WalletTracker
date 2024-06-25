@@ -64,7 +64,13 @@ async function storeTransactionInDB(tx, collectionName) {
     
     if (!existingAddress) {
       // If address doesn't exist, insert it into DepositAddresses
-      await depositAddressCollection.insertOne({ address: tx.to });
+      await depositAddressCollection.insertOne({ address: tx.to, timestamp: new Date(), isActive: false });
+    } else {
+      // Update the address to mark it as active
+      await depositAddressCollection.updateOne(
+        { address: tx.to },
+        { $set: { timestamp: new Date(), isActive: false } }
+      );
     }
 
     // Insert transaction into DepositTransactions
@@ -72,6 +78,7 @@ async function storeTransactionInDB(tx, collectionName) {
     console.log("Transaction stored in MongoDB with _id:", result.insertedId);
   } catch (error) {
     console.error("Error storing transaction in MongoDB:", error.message);
+    throw error; // Rethrow the error to handle it further up the call stack
   } finally {
     await client.close();
   }
@@ -91,7 +98,15 @@ async function startTrackingDeposits() {
     return;
   }
 
+  // Cache for already processed blocks to avoid redundant API calls
+  const processedBlocks = new Set();
+
   const handleBlock = async (blockNumber) => {
+    if (processedBlocks.has(blockNumber)) {
+      return; // Skip already processed blocks
+    }
+
+    processedBlocks.add(blockNumber);
     console.log(chalk.cyan(`New block received: ${blockNumber}`));
 
     try {
@@ -99,6 +114,7 @@ async function startTrackingDeposits() {
       if (block && block.transactions.length > 0) {
         console.log(chalk.green(`Block ${blockNumber} has ${block.transactions.length} transactions.`));
         let foundTransactions = false;
+
         for (const txHash of block.transactions) {
           try {
             const tx = await provider.getTransaction(txHash);
@@ -154,12 +170,6 @@ To: <code>${shortTo}</code>\n
     } catch (error) {
       console.error(chalk.red(`Error processing block ${blockNumber}:`), error.message);
     }
-
-    try {
-      await startTrackingDeposits();
-    } catch (error) {
-      console.error(chalk.red("Error in deposit tracking:"), error);
-    }
   };
 
   provider.once("block", handleBlock);
@@ -177,6 +187,5 @@ To: <code>${shortTo}</code>\n
   process.once("SIGINT", handleSigint);
 }
 
-module.exports = {
-  startTrackingDeposits
-};
+// Export the function
+module.exports = { startTrackingDeposits };

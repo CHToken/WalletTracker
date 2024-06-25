@@ -63,10 +63,41 @@ async function sendTelegramMessage(tx, tokenContractAddress) {
 function parseTokenContractAddressFromLogs(logs) {
   if (logs && logs.length >= 3) {
     // The token contract address is located in the third log entry
-    return logs[2].address.toLowerCase(); 
+    return logs[2].address.toLowerCase();
   }
   return null;
-}  
+}
+
+async function markAddressActive(address) {
+  const collection = client.db("blockchain").collection("DepositAddresses");
+  await collection.updateOne(
+    { address },
+    { $set: { lastActive: new Date(), isActive: true } },
+    { upsert: true }
+  );
+}
+
+async function removeInactiveAddresses() {
+  const collection = client.db("blockchain").collection("DepositAddresses");
+  const cutoff = new Date();
+  cutoff.setHours(cutoff.getHours() - 24); // Remove addresses older than 24 hours
+
+  // Log the count of addresses before attempting deletion
+  const countBefore = await collection.countDocuments({});
+  console.log('All addresses count before deletion:', countBefore);
+
+  // Perform deletion
+  const result = await collection.deleteMany({
+    lastActive: { $lt: cutoff },
+    isActive: false
+  });
+
+  // Log the count of remaining addresses after deletion attempt
+  const countAfter = await collection.countDocuments({});
+  console.log('Remaining addresses count after deletion:', countAfter);
+
+  console.log(`Removed ${result.deletedCount} inactive addresses`);
+}
 
 async function SwapTrack() {
   try {
@@ -82,6 +113,11 @@ async function SwapTrack() {
     // Display bot running message
     await displayBotRunning();
 
+    // Periodically remove inactive addresses
+    setInterval(async () => {
+      await removeInactiveAddresses();
+    }, 60 * 60 * 1000); // Check every 1 hour
+
     // Check transactions with specific method inputs
     provider.on("block", async (blockNumber) => {
       const chalk = await importChalk();
@@ -91,6 +127,10 @@ async function SwapTrack() {
         const block = await provider.getBlock(blockNumber);
         if (block && block.transactions.length > 0) {
           console.log(chalk.cyan(`Block ${blockNumber} has ${block.transactions.length} transactions.`));
+
+          // Fetch updated addresses
+          const addresses = await collection.distinct("address");
+          const trackedAddresses = addresses.map((address) => address.toLowerCase());
           console.log(chalk.green(`Scanning ${trackedAddresses.length} DepositAddresses in block ${blockNumber}.`));
 
           for (const txHash of block.transactions) {
@@ -115,6 +155,9 @@ async function SwapTrack() {
 
                   // Send notification to Telegram channel
                   await sendTelegramMessage(tx, tokenContractAddress);
+
+                  // Mark address as active
+                  await markAddressActive(tx.from.toLowerCase());
                 }
               }
             } catch (error) {
@@ -156,4 +199,5 @@ module.exports = {
   SwapTrack
 };
 
+// Uncomment the line below to start the tracking when the script is run directly
 // SwapTrack();
