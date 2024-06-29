@@ -1,10 +1,8 @@
-// track.js
-require("dotenv").config();
 const { ethers } = require("ethers");
 const fs = require("fs");
 const path = require("path");
 const TelegramBot = require("node-telegram-bot-api");
-const { MongoClient } = require("mongodb");
+require('dotenv').config();
 
 // Construct the absolute path to config.json
 const configPath = path.join(__dirname, "config.json");
@@ -13,7 +11,6 @@ const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 // Environment variables
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_DEPOSIT_CHANNEL_ID = process.env.TELEGRAM_DEPOSIT_CHANNEL_ID;
-const MONGODB_URL = process.env.MONGODB_URL;
 const INFURA_URL = process.env.INFURA_URL;
 
 // Initialize Telegram Bot
@@ -51,15 +48,12 @@ async function sendTelegramMessage(message, channelID) {
 }
 
 // Function to store the transaction details in MongoDB
-async function storeTransactionInDB(tx, collectionName) {
-  const client = new MongoClient(MONGODB_URL);
+async function storeTransactionInDB(tx, db) {
   try {
-    await client.connect();
-    const database = client.db("blockchain");
-    const collection = database.collection(collectionName);
+    const collection = db.collection("DepositTransactions");
 
     // Check if the deposit address already exists in DepositAddresses
-    const depositAddressCollection = database.collection("DepositAddresses");
+    const depositAddressCollection = db.collection("DepositAddresses");
     const existingAddress = await depositAddressCollection.findOne({ address: tx.to });
     
     if (!existingAddress) {
@@ -79,13 +73,11 @@ async function storeTransactionInDB(tx, collectionName) {
   } catch (error) {
     console.error("Error storing transaction in MongoDB:", error.message);
     throw error; // Rethrow the error to handle it further up the call stack
-  } finally {
-    await client.close();
   }
 }
 
-// Function to track ETH deposits using the method from old code
-async function startTrackingDeposits() {
+// Function to track ETH deposits using the method
+async function startTrackingDeposits(db) {
   const provider = ethers.getDefaultProvider(INFURA_URL);
   const exchangeWallets = config.exchangeWallets.map((wallet) => wallet.address.toLowerCase());
 
@@ -98,15 +90,7 @@ async function startTrackingDeposits() {
     return;
   }
 
-  // Cache for already processed blocks to avoid redundant API calls
-  const processedBlocks = new Set();
-
   const handleBlock = async (blockNumber) => {
-    if (processedBlocks.has(blockNumber)) {
-      return; // Skip already processed blocks
-    }
-
-    processedBlocks.add(blockNumber);
     console.log(chalk.cyan(`New block received: ${blockNumber}`));
 
     try {
@@ -114,7 +98,6 @@ async function startTrackingDeposits() {
       if (block && block.transactions.length > 0) {
         console.log(chalk.green(`Block ${blockNumber} has ${block.transactions.length} transactions.`));
         let foundTransactions = false;
-
         for (const txHash of block.transactions) {
           try {
             const tx = await provider.getTransaction(txHash);
@@ -147,7 +130,7 @@ To: <code>${shortTo}</code>\n
                     amountInEth,
                     hash: tx.hash,
                     timestamp: new Date()
-                  }, "DepositTransactions");
+                  }, db);
                 }
               } else {
                 console.log(chalk.white(`Amount: 0 wei`));
@@ -170,6 +153,12 @@ To: <code>${shortTo}</code>\n
     } catch (error) {
       console.error(chalk.red(`Error processing block ${blockNumber}:`), error.message);
     }
+
+    try {
+      await startTrackingDeposits(db);
+    } catch (error) {
+      console.error(chalk.red("Error in deposit tracking:"), error);
+    }
   };
 
   provider.once("block", handleBlock);
@@ -187,5 +176,6 @@ To: <code>${shortTo}</code>\n
   process.once("SIGINT", handleSigint);
 }
 
-// Export the function
-module.exports = { startTrackingDeposits };
+module.exports = {
+  startTrackingDeposits
+};
