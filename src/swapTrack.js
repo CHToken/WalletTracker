@@ -55,6 +55,9 @@ async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSym
     const valueInEth = weiToEth(tx.value.toString());
     const etherscanLink = `https://etherscan.io/tx/${tx.hash}`;
     const tokenAge = formatTokenAge(tokenCreationDate);
+    console.log("Token Age: ", tokenAge);
+    console.log("Value in ETH: ", valueInEth);
+    console.log("Transaction Hash: ", tx.hash);
 
     if (valueInEth === 0.5) {
       const message = `
@@ -380,8 +383,6 @@ async function SwapTrack() {
                         continue; // Skip notification for 0 ETH 1Inch transactions
                       }
                     }
-
-                    const tokenAge = formatTokenAge(tokenCreationDate);
 
                     // Send Telegram message with transaction and token details
                     await sendTelegramMessage(
