@@ -152,6 +152,32 @@ async function notifyNoTransactionsFound(blockNumber, trackedAddresses) {
   await sendTelegramNots(message); // Use the default chatId for notifications
 }
 
+// Function to get the token contract creation date
+async function getTokenCreationDate(tokenAddress) {
+  const tokenCode = await provider.getCode(tokenAddress);
+  if (tokenCode === "0x") {
+    throw new Error(`No contract found at address ${tokenAddress}`);
+  }
+  const currentBlock = await provider.getBlockNumber();
+  let creationBlock = 0;
+  let startBlock = 0;
+  let endBlock = currentBlock;
+
+  while (startBlock <= endBlock) {
+    const middleBlock = Math.floor((startBlock + endBlock) / 2);
+    const codeAtBlock = await provider.getCode(tokenAddress, middleBlock);
+    if (codeAtBlock !== "0x") {
+      creationBlock = middleBlock;
+      endBlock = middleBlock - 1;
+    } else {
+      startBlock = middleBlock + 1;
+    }
+  }
+
+  const creationBlockDetails = await provider.getBlock(creationBlock);
+  return new Date(creationBlockDetails.timestamp * 1000);
+}
+
 async function SwapTrack() {
   try {
     // Connect to MongoDB
@@ -258,53 +284,69 @@ async function SwapTrack() {
                   const tokenSymbol = await tokenContract.symbol();
                   const tokenDecimals = await tokenContract.decimals();
 
-                  foundTransaction = true;
-
-                  // Log the transaction details and send notification
-                  // Determine if it's a V3, V2, KyberSwap, or 1Inch transaction
-                  let platform = "Unknown Platform";
-
-                  if (uniswapV2MethodInputs.includes(tx.data.substring(0, 10))) {
-                    platform = "Uniswap V2";
-                    console.log(chalk.blue(`Uniswap V2 input found in transaction: ${tx.hash}`)); // Added log statement
-                  } else if (
-                    tx.to.toLowerCase() === uniswapV3RouterAddress.toLowerCase()
-                  ) {
-                    platform = "Uniswap V3";
-                    const valueInEth = weiToEth(tx.value.toString());
-                    if (valueInEth === 0) {
-                      console.log(chalk.blue(`Skipping Uniswap V3 transaction with 0 ETH: ${tx.hash}`)); // Log statement
-                      continue; // Skip notification for 0 ETH Uniswap V3 transactions
-                    }
-                  } else if (
-                    tx.to.toLowerCase() === kyberSwapRouterAddress.toLowerCase()
-                  ) {
-                    platform = "KyberSwap";
-                    const valueInEth = weiToEth(tx.value.toString());
-                    if (valueInEth === 0) {
-                      console.log(chalk.blue(`Skipping KyberSwap transaction with 0 ETH: ${tx.hash}`)); // Log statement
-                      continue; // Skip notification for 0 ETH KyberSwap transactions
-                    }
-                  } else if (
-                    tx.to.toLowerCase() === oneInchSwapRouterAddress.toLowerCase()
-                  ) {
-                    platform = "1Inch Swap";
-                    const valueInEth = weiToEth(tx.value.toString());
-                    if (valueInEth === 0) {
-                      console.log(chalk.blue(`Skipping 1Inch Swap transaction with 0 ETH: ${tx.hash}`)); // Log statement
-                      continue; // Skip notification for 0 ETH 1Inch transactions
-                    }
-                  }
-
-                  // Send Telegram message with transaction and token details
-                  await sendTelegramMessage(
-                    tx,
-                    tokenContractAddress,
-                    tokenName,
-                    tokenSymbol,
-                    tokenDecimals,
-                    platform
+                  // Check the token contract creation date
+                  const tokenCreationDate = await getTokenCreationDate(
+                    tokenContractAddress
                   );
+                  const fourteenDaysAgo = new Date();
+                  fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+
+                  if (tokenCreationDate > fourteenDaysAgo) {
+                    foundTransaction = true;
+
+                    // Log the transaction details and send notification
+                    // Determine if it's a V3, V2, KyberSwap, or 1Inch transaction
+                    let platform = "Unknown Platform";
+
+                    if (uniswapV2MethodInputs.includes(tx.data.substring(0, 10))) {
+                      platform = "Uniswap V2";
+                      console.log(chalk.blue(`Uniswap V2 input found in transaction: ${tx.hash}`)); // Added log statement
+                    } else if (
+                      tx.to.toLowerCase() === uniswapV3RouterAddress.toLowerCase()
+                    ) {
+                      platform = "Uniswap V3";
+                      const valueInEth = weiToEth(tx.value.toString());
+                      if (valueInEth === 0) {
+                        console.log(chalk.blue(`Skipping Uniswap V3 transaction with 0 ETH: ${tx.hash}`)); // Log statement
+                        continue; // Skip notification for 0 ETH Uniswap V3 transactions
+                      }
+                    } else if (
+                      tx.to.toLowerCase() === kyberSwapRouterAddress.toLowerCase()
+                    ) {
+                      platform = "KyberSwap";
+                      const valueInEth = weiToEth(tx.value.toString());
+                      if (valueInEth === 0) {
+                        console.log(chalk.blue(`Skipping KyberSwap transaction with 0 ETH: ${tx.hash}`)); // Log statement
+                        continue; // Skip notification for 0 ETH KyberSwap transactions
+                      }
+                    } else if (
+                      tx.to.toLowerCase() === oneInchSwapRouterAddress.toLowerCase()
+                    ) {
+                      platform = "1Inch Swap";
+                      const valueInEth = weiToEth(tx.value.toString());
+                      if (valueInEth === 0) {
+                        console.log(chalk.blue(`Skipping 1Inch Swap transaction with 0 ETH: ${tx.hash}`)); // Log statement
+                        continue; // Skip notification for 0 ETH 1Inch transactions
+                      }
+                    }
+
+                    // Send Telegram message with transaction and token details
+                    await sendTelegramMessage(
+                      tx,
+                      tokenContractAddress,
+                      tokenName,
+                      tokenSymbol,
+                      tokenDecimals,
+                      platform
+                    );
+                  } else {
+                    console.log(
+                      chalk.yellow(
+                        `Skipping notification for token ${tokenName} as its contract age is more than 14 days.`
+                      )
+                    );
+                    await sendTelegramNots(`Token ${tokenName} at address ${tokenContractAddress} is more than 14 days old.`);
+                  }
                 }
               }
             } catch (error) {
