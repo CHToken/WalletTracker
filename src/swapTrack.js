@@ -2,6 +2,7 @@ const { MongoClient } = require("mongodb");
 const { ethers } = require("ethers");
 const dotenv = require("dotenv");
 const TelegramBot = require("node-telegram-bot-api");
+const moment = require("moment");
 dotenv.config();
 
 // Set up Infura provider
@@ -35,25 +36,56 @@ function weiToEth(weiAmount) {
   return parseFloat(ethAmount.toFixed(6));
 }
 
-async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSymbol, tokenDecimals, platform) {
+function formatTokenAge(creationDate) {
+  const now = moment();
+  const duration = moment.duration(now.diff(creationDate));
+  if (duration.asMinutes() < 60) {
+    return `${Math.floor(duration.asMinutes())} min ago`;
+  } else if (duration.asHours() < 24) {
+    return `${Math.floor(duration.asHours())} hr ago`;
+  } else {
+    return `${Math.floor(duration.asDays())} days ago`;
+  }
+}
+
+async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSymbol, tokenDecimals, platform, tokenCreationDate) {
   try {
     console.log("Sending Telegram message...");
     const valueInEth = weiToEth(tx.value.toString());
     const etherscanLink = `https://etherscan.io/tx/${tx.hash}`;
+    const tokenAge = formatTokenAge(tokenCreationDate);
 
-    const message = `
+    if (valueInEth === 0.5) {
+      const message = `
 <b>${platform} Buy Detected ✅</b>
 
 <b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>\n
 <b>Block Number:</b> ${tx.blockNumber}
 <b>From:</b> <code>${tx.from}</code>
 <b>To:</b> <code>${tx.to}</code>\n
-<b>Value:</b> <b>${valueInEth} ETH</b>\n
+<b>Value:</b> <b>${valueInEth}</b>\n
 <b>Token:</b> ${tokenName} (${tokenSymbol})
 <b>Decimals:</b> ${tokenDecimals}
 <b>Token Contract:</b> <a href="https://etherscan.io/address/${tokenContractAddress}">${tokenContractAddress}</a>
+<b>Token Age:</b> ${tokenAge}
 `;
-    await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+      await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+    } else if (valueInEth > 0.5) {
+      const message = `
+<b>${platform} Buy Detected ✅</b>
+
+<b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>\n
+<b>Block Number:</b> ${tx.blockNumber}
+<b>From:</b> <code>${tx.from}</code>
+<b>To:</b> <code>${tx.to}</code>\n
+<b>Value:</b> <b>${valueInEth}</b>\n
+<b>Token:</b> ${tokenName} (${tokenSymbol})
+<b>Decimals:</b> ${tokenDecimals}
+<b>Token Contract:</b> <a href="https://etherscan.io/address/${tokenContractAddress}">${tokenContractAddress}</a>
+<b>Token Age:</b> ${tokenAge}
+`;
+      await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+    }
   } catch (error) {
     const chalk = await importChalk();
     console.error(chalk.red("Error sending Telegram message:"), error.message);
@@ -330,6 +362,8 @@ async function SwapTrack() {
                       }
                     }
 
+                    const tokenAge = formatTokenAge(tokenCreationDate);
+
                     // Send Telegram message with transaction and token details
                     await sendTelegramMessage(
                       tx,
@@ -337,7 +371,8 @@ async function SwapTrack() {
                       tokenName,
                       tokenSymbol,
                       tokenDecimals,
-                      platform
+                      platform,
+                      tokenAge
                     );
                   } else {
                     console.log(
