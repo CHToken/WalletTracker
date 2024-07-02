@@ -4,6 +4,7 @@ const dotenv = require("dotenv");
 const TelegramBot = require("node-telegram-bot-api");
 const moment = require("moment");
 dotenv.config();
+const axios = require('axios');
 
 // Set up Infura provider
 const infuraUrl = process.env.SWAP_INFURA_URL;
@@ -184,30 +185,48 @@ async function notifyNoTransactionsFound(blockNumber, trackedAddresses) {
   await sendTelegramNots(message); // Use the default chatId for notifications
 }
 
-// Function to get the token contract creation date
+// Function to get the token contract creation date using Etherscan API
 async function getTokenCreationDate(tokenAddress) {
-  const tokenCode = await provider.getCode(tokenAddress);
-  if (tokenCode === "0x") {
-    throw new Error(`No contract found at address ${tokenAddress}`);
-  }
-  const currentBlock = await provider.getBlockNumber();
-  let creationBlock = 0;
-  let startBlock = 0;
-  let endBlock = currentBlock;
+  try {
+    console.log(`Starting the process to get contract creation date for ${tokenAddress}...`);
 
-  while (startBlock <= endBlock) {
-    const middleBlock = Math.floor((startBlock + endBlock) / 2);
-    const codeAtBlock = await provider.getCode(tokenAddress, middleBlock);
-    if (codeAtBlock !== "0x") {
-      creationBlock = middleBlock;
-      endBlock = middleBlock - 1;
+    // Fetch transaction list for the contract address
+    const url = `https://api.etherscan.io/api?module=account&action=txlist&address=${tokenAddress}&startblock=0&endblock=99999999&sort=asc&apikey=${process.env.ETHERSCAN_API_KEY}`;
+    console.log(`Fetching transactions for contract address: ${tokenAddress}`);
+    const response = await axios.get(url);
+
+    if (response.data.status === "1") {
+      console.log("Transaction list fetched successfully.");
+      const transactions = response.data.result;
+      const creationTx = transactions[0]; // The first transaction is the contract creation
+
+      const creationBlock = creationTx.blockNumber;
+      console.log(`The contract was created in block number: ${creationBlock}`);
+
+      // Fetch block details to get the timestamp
+      const blockUrl = `https://api.etherscan.io/api?module=block&action=getblockreward&blockno=${creationBlock}&apikey=${process.env.ETHERSCAN_API_KEY}`;
+      console.log(`Fetching details for block number: ${creationBlock}`);
+      const blockResponse = await axios.get(blockUrl);
+
+      if (blockResponse.data.status === "1") {
+        console.log("Block details fetched successfully.");
+        const blockTimestamp = blockResponse.data.result.timeStamp;
+        return new Date(blockTimestamp * 1000);
+      } else {
+        console.error("Failed to fetch block details.");
+        console.error(blockResponse.data);
+        return null;
+      }
     } else {
-      startBlock = middleBlock + 1;
+      console.error("Failed to fetch transaction details.");
+      console.error(response.data);
+      return null;
     }
+  } catch (error) {
+    console.error("An error occurred while fetching the contract creation date:");
+    console.error(error.message);
+    return null;
   }
-
-  const creationBlockDetails = await provider.getBlock(creationBlock);
-  return new Date(creationBlockDetails.timestamp * 1000);
 }
 
 async function SwapTrack() {
@@ -372,7 +391,7 @@ async function SwapTrack() {
                       tokenSymbol,
                       tokenDecimals,
                       platform,
-                      tokenAge
+                      tokenCreationDate
                     );
                   } else {
                     console.log(

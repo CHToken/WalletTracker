@@ -60,9 +60,9 @@ async function storeTransactionInDB(tx, db, provider) {
       // Check the number of transactions for the address from the blockchain
       const transactionCount = await provider.getTransactionCount(tx.to);
       
-      if (transactionCount <= 15) {
+      if (transactionCount <= 13) {
         console.log(`Address ${tx.to} has ${transactionCount} transactions on the blockchain. Storing address.`);
-        // If the address has 15 or fewer transactions, insert it into DepositAddresses
+        // If the address has 13 or fewer transactions, insert it into DepositAddresses
         await depositAddressCollection.insertOne({ address: tx.to, timestamp: new Date(), isActive: false });
 
         // Insert transaction into DepositTransactions
@@ -79,7 +79,7 @@ To: <code>${shortTo}</code>\n
 🔗 Hash: <a href="${etherscanUrl}">${tx.hash}</a>`;
         await sendTelegramMessage(message, TELEGRAM_DEPOSIT_CHANNEL_ID);
       } else {
-        console.log(`Address ${tx.to} has more than 15 transactions on the blockchain. Not storing address.`);
+        console.log(`Address ${tx.to} has more than 13 transactions on the blockchain. Not storing address.`);
       }
     } else {
       // Update the address to mark it as active
@@ -137,7 +137,7 @@ async function startTrackingDeposits(db) {
                   console.log(chalk.yellow("---"));
                   foundTransactions = true;
 
-                  // Store transaction in MongoDB and send Telegram notification only if transaction count is <= 15
+                  // Store transaction in MongoDB and send Telegram notification only if transaction count is <= 13
                   await storeTransactionInDB({
                     from: tx.from,
                     to: tx.to,
