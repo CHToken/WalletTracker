@@ -17,11 +17,18 @@ async function removeOldAddresses() {
 
     const query = { timestamp: { $lt: cutoffTime } };
     
-    const result = await collection.deleteMany(query);
+    const oldAddresses = await collection.find(query).toArray();
 
-    console.log(`Deleted ${result.deletedCount} addresses older than 12 hours.`);
+    console.log("Number of addresses older than 12 hours:", oldAddresses.length);
+
+    if (oldAddresses.length > 0) {
+      const result = await collection.deleteMany(query);
+      console.log(`Deleted ${result.deletedCount} addresses older than 12 hours.`);
+    }
+
+    return oldAddresses;
   } catch (error) {
-    console.error("Error removing old addresses:", error);
+    console.error("Error retrieving and deleting old addresses:", error);
   } finally {
     await client.close();
   }
