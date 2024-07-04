@@ -1,3 +1,4 @@
+// track.js
 const { ethers } = require("ethers");
 const fs = require("fs");
 const path = require("path");
@@ -48,7 +49,7 @@ async function sendTelegramMessage(message, channelID) {
 }
 
 // Function to store the transaction details in MongoDB
-async function storeTransactionInDB(tx, db, provider) {
+async function storeTransactionInDB(tx, db) {
   try {
     const collection = db.collection("DepositTransactions");
 
@@ -57,41 +58,19 @@ async function storeTransactionInDB(tx, db, provider) {
     const existingAddress = await depositAddressCollection.findOne({ address: tx.to });
     
     if (!existingAddress) {
-      // Check the number of transactions for the address from the blockchain
-      const transactionCount = await provider.getTransactionCount(tx.to);
-      
-      if (transactionCount <= 12) {
-        console.log(`Address ${tx.to} has ${transactionCount} transactions on the blockchain. Storing address.`);
-        // If the address has 12 or fewer transactions, insert it into DepositAddresses
-        await depositAddressCollection.insertOne({ address: tx.to, timestamp: new Date(), isActive: false });
-
-        // Insert transaction into DepositTransactions
-        const result = await collection.insertOne(tx);
-        console.log("Transaction stored in MongoDB with _id:", result.insertedId);
-
-        const shortFrom = shortenAddress(tx.from);
-        const shortTo = shortenAddress(tx.to);
-        const etherscanUrl = `https://etherscan.io/tx/${tx.hash}`;
-        const message = `🚀 New Deposit Found ✅\n
-From: <code>${shortFrom} (${getTagForAddress(tx.from)})</code>
-To: <code>${shortTo}</code>\n
-💲Amount: <code>${tx.amountInEth} ETH</code>
-🔗 Hash: <a href="${etherscanUrl}">${tx.hash}</a>`;
-        await sendTelegramMessage(message, TELEGRAM_DEPOSIT_CHANNEL_ID);
-      } else {
-        console.log(`Address ${tx.to} has more than 12 transactions on the blockchain. Not storing address.`);
-      }
+      // If address doesn't exist, insert it into DepositAddresses
+      await depositAddressCollection.insertOne({ address: tx.to, timestamp: new Date(), isActive: false });
     } else {
       // Update the address to mark it as active
       await depositAddressCollection.updateOne(
         { address: tx.to },
         { $set: { timestamp: new Date(), isActive: false } }
       );
-
-      // Insert transaction into DepositTransactions
-      const result = await collection.insertOne(tx);
-      console.log("Transaction stored in MongoDB with _id:", result.insertedId);
     }
+
+    // Insert transaction into DepositTransactions
+    const result = await collection.insertOne(tx);
+    console.log("Transaction stored in MongoDB with _id:", result.insertedId);
   } catch (error) {
     console.error("Error storing transaction in MongoDB:", error.message);
     throw error; // Rethrow the error to handle it further up the call stack
@@ -137,14 +116,22 @@ async function startTrackingDeposits(db) {
                   console.log(chalk.yellow("---"));
                   foundTransactions = true;
 
-                  // Store transaction in MongoDB and send Telegram notification only if transaction count is <= 13
+                  const etherscanUrl = `https://etherscan.io/tx/${tx.hash}`;
+                  const message = `🚀 New Deposit Found ✅\n
+From: <code>${shortFrom} (${getTagForAddress(tx.from)})</code>
+To: <code>${shortTo}</code>\n
+💲Amount: <code>${amountInEth} ETH</code>
+🔗 Hash: <a href="${etherscanUrl}">${tx.hash}</a>`;
+                  await sendTelegramMessage(message, TELEGRAM_DEPOSIT_CHANNEL_ID);
+
+                  // Store transaction in MongoDB
                   await storeTransactionInDB({
                     from: tx.from,
                     to: tx.to,
                     amountInEth,
                     hash: tx.hash,
                     timestamp: new Date()
-                  }, db, provider); // Pass provider to the storeTransactionInDB function
+                  }, db);
                 }
               } else {
                 console.log(chalk.white(`Amount: 0 wei`));

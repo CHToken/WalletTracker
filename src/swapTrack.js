@@ -49,8 +49,24 @@ function formatTokenAge(creationDate) {
   }
 }
 
+async function getTransactionCount(address) {
+  const url = `https://api.etherscan.io/api?module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&sort=asc&apikey=${process.env.ETHERSCAN_API_KEY}`;
+  const response = await axios.get(url);
+  const transactions = response.data.result;
+  console.log(`Address ${address} has ${transactions.length} before sending telegram notification.`);
+  return transactions.length;
+}
+
 async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSymbol, tokenDecimals, platform, tokenCreationDate) {
   try {
+    const transactionCount = await getTransactionCount(tx.from); // Include the current transaction
+    console.log(`Address ${tx.from} has ${transactionCount} in telegram notification transactions.`);
+
+    if (transactionCount > 15) {
+      console.log(`Skipping notification for address ${tx.from} with ${transactionCount} transactions.`);
+      return;
+    }
+
     console.log("Sending Telegram message...");
     const valueInEth = weiToEth(tx.value.toString());
     const etherscanLink = `https://etherscan.io/tx/${tx.hash}`;
@@ -58,6 +74,7 @@ async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSym
     console.log("Token Age: ", tokenAge);
     console.log("Value in ETH: ", valueInEth);
     console.log("Transaction Hash: ", tx.hash);
+    console.log("Transaction Count: ", transactionCount);
 
     if (valueInEth === 0.5) {
       const message = `
@@ -67,11 +84,12 @@ async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSym
 <b>Block Number:</b> ${tx.blockNumber}
 <b>From:</b> <code>${tx.from}</code>
 <b>To:</b> <code>${tx.to}</code>\n
-<b>Value:</b> <b>${valueInEth}</b>\n
+<b>Value:</b> <b>${valueInEth} ETH</b>\n
 <b>Token:</b> ${tokenName} (${tokenSymbol})
 <b>Decimals:</b> ${tokenDecimals}
 <b>Token Contract:</b> <a href="https://etherscan.io/address/${tokenContractAddress}">${tokenContractAddress}</a>
 <b>Token Age:</b> ${tokenAge}
+<b>Transaction Count:</b> ${transactionCount}
 `;
       await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
     } else if (valueInEth > 0.5) {
@@ -82,11 +100,12 @@ async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSym
 <b>Block Number:</b> ${tx.blockNumber}
 <b>From:</b> <code>${tx.from}</code>
 <b>To:</b> <code>${tx.to}</code>\n
-<b>Value:</b> <b>${valueInEth}</b>\n
+<b>Value:</b> <b>${valueInEth} ETH</b>\n
 <b>Token:</b> ${tokenName} (${tokenSymbol})
 <b>Decimals:</b> ${tokenDecimals}
 <b>Token Contract:</b> <a href="https://etherscan.io/address/${tokenContractAddress}">${tokenContractAddress}</a>
 <b>Token Age:</b> ${tokenAge}
+<b>Transaction Count:</b> ${transactionCount}
 `;
       await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
     }
@@ -114,16 +133,13 @@ function parseTokenContractAddressFromLogs(logs) {
   return null;
 }
 
-async function sendDeleteNotification(deleteNotificationChatId, addresses) {
+async function sendDeleteNotification(deleteNotificationChatId, countInactive) {
   try {
     const message = `
 📢 <b>Inactive Addresses Removed</b> 📢
 
-The following addresses have been removed from the database due to inactivity:\n
-${addresses.map((address) => `<b>${address}</b>`).join('\n')}
-
-Total Address Count is
-${addresses.length}
+The following addresses have been removed from the database due to inactivity:
+Total Address Count is ${countInactive}
     `;
     await bot.sendMessage(deleteNotificationChatId, message, { parse_mode: "HTML" });
   } catch (error) {
@@ -169,7 +185,8 @@ async function removeInactiveAddresses() {
 
     // Send notification if addresses were removed
     if (result.deletedCount > 0) {
-      await sendDeleteNotification(deleteNotificationChatId, inactiveAddresses.map(doc => doc.address));
+      // display only the inactive addresses count
+      await sendDeleteNotification(deleteNotificationChatId, countInactive);
     }
 
     // Log and return the count of inactive addresses
