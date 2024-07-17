@@ -289,6 +289,7 @@ async function getTransactionData(txHash) {
   }
 }
 
+
 // Function to start tracking MEV transactions
 async function startMEVTracking() {
   const fromAddress = process.env.MEV_TX_FROM;
