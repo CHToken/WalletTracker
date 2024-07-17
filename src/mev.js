@@ -5,7 +5,7 @@ const TelegramBot = require("node-telegram-bot-api");
 dotenv.config();
 
 // Set up Infura provider
-const infuraUrl = process.env.SWAP_INFURA_URL;
+const infuraUrl = process.env.MEV_INFURA_URL;
 const provider = new ethers.getDefaultProvider(infuraUrl);
 
 // Telegram bot setup
