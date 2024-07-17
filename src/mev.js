@@ -4,6 +4,8 @@ const dotenv = require("dotenv");
 const TelegramBot = require("node-telegram-bot-api");
 dotenv.config();
 
+const processedBlocks = new Set();
+
 // Set up Infura provider
 const infuraUrl = process.env.MEV_INFURA_URL;
 const provider = new ethers.getDefaultProvider(infuraUrl);
@@ -296,6 +298,12 @@ async function startMEVTracking() {
   const toAddress = process.env.MEV_BOT_ADDRESS;
 
   provider.on("block", async (blockNumber) => {
+    if (processedBlocks.has(blockNumber)) {
+      console.log(`Block ${blockNumber} has already been processed.`);
+      return; 
+    }
+    processedBlocks.add(blockNumber);
+
     console.log(`New block detected: ${blockNumber}`);
     try {
       const block = await provider.getBlock(blockNumber);
