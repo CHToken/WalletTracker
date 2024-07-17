@@ -154,7 +154,7 @@ async function removeInactiveAddresses() {
     const collection = client.db("blockchain").collection("DepositAddresses");
 
     const cutoff = new Date();
-    cutoff.setHours(cutoff.getHours() - 12); // Remove addresses older than 12 hours in UTC
+    cutoff.setHours(cutoff.getHours() - 8); // Remove addresses older than 8 hours in UTC
 
     // Log the count of addresses before attempting deletion
     const countBefore = await collection.countDocuments({});
@@ -262,7 +262,7 @@ async function SwapTrack() {
     // Periodically remove inactive addresses
     setInterval(async () => {
       await removeInactiveAddresses();
-    }, 60 * 60 * 1000); // Check every 1 hour
+    }, 30 * 60 * 1000); // Check every 30 minutes
 
     // Subscribe to new blocks
     provider.on("block", async (blockNumber) => {
