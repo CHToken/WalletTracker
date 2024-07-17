@@ -5,6 +5,7 @@ const TelegramBot = require("node-telegram-bot-api");
 dotenv.config();
 
 const processedBlocks = new Set();
+const firstTransactionCache = new Set(); // Cache to track first transactions
 
 // Set up Infura provider
 const infuraUrl = process.env.MEV_INFURA_URL;
@@ -152,7 +153,6 @@ async function getFormattedBlockDateTime(blockNumber) {
 
 async function sendTelegramMessage(tx, decodedLogs) {
   try {
-    console.log("Sending Telegram message...");
     const etherscanLink = `https://etherscan.io/tx/${tx.hash}`;
     const fromLink = `https://etherscan.io/address/${tx.from}`;
     const toLink = `https://etherscan.io/address/${tx.to}`;
@@ -188,6 +188,17 @@ async function sendTelegramMessage(tx, decodedLogs) {
 
       // Check if it's the first transaction for the token by the tx.to address
       const isFirstTransaction = await isFirstTransactionForToken(tokenIn, tx.to, tx.blockNumber);
+
+      // Skip if it's not the first transaction for the token by the tx.to address
+      if (!isFirstTransaction || firstTransactionCache.has(tokenIn)) {
+        return null;
+      }
+
+      // Add to the cache to avoid duplicate notifications
+      firstTransactionCache.add(tokenIn);
+
+      console.log(`First transaction detected for token: ${tokenIn}`);
+
       let firstTransactionDateTime = "";
       if (isFirstTransaction) {
         firstTransactionDateTime = await getFormattedBlockDateTime(tx.blockNumber);
@@ -204,9 +215,11 @@ async function sendTelegramMessage(tx, decodedLogs) {
     const filteredLogDetails = logDetails.filter(detail => detail !== null);
 
     if (filteredLogDetails.length === 0) {
-      console.log("No valid swap logs found with non-zero Amount In or valid decimals.");
+      console.log("No valid swap logs found with non-zero Amount In or valid decimals or no first transaction.");
       return;
     }
+
+    console.log("Sending Telegram message...");
 
     const message = `
 <b>Transaction Detected ✅</b>
@@ -218,7 +231,7 @@ async function sendTelegramMessage(tx, decodedLogs) {
 <b>Logs:</b>\n${filteredLogDetails.join("\n\n")}
 `;
     await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
-    console.log("Telegram message sent successfully.");
+    console.log(`First transaction notification sent for token: ${tokenIn}`);
   } catch (error) {
     console.error("Error sending Telegram message:", error.message);
   }
@@ -290,7 +303,6 @@ async function getTransactionData(txHash) {
     console.error("Error getting transaction data:", error.message);
   }
 }
-
 
 // Function to start tracking MEV transactions
 async function startMEVTracking() {

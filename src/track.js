@@ -3,11 +3,21 @@ const { ethers } = require("ethers");
 const fs = require("fs");
 const path = require("path");
 const TelegramBot = require("node-telegram-bot-api");
+const { MongoClient } = require("mongodb");
 require('dotenv').config();
 
 // Construct the absolute path to config.json
 const configPath = path.join(__dirname, "config.json");
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+
+const mongoUri = process.env.MONGODB_URL;
+const client = new MongoClient(mongoUri);
+
+// Connect to MongoDB
+async function connectToDatabase() {
+  await client.connect();
+  return client.db("blockchain");
+}
 
 // Environment variables
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -49,14 +59,15 @@ async function sendTelegramMessage(message, channelID) {
 }
 
 // Function to store the transaction details in MongoDB
-async function storeTransactionInDB(tx, db) {
+async function storeTransactionInDB(tx) {
+  const db = client.db("blockchain"); 
   try {
     const collection = db.collection("DepositTransactions");
 
     // Check if the deposit address already exists in DepositAddresses
     const depositAddressCollection = db.collection("DepositAddresses");
     const existingAddress = await depositAddressCollection.findOne({ address: tx.to });
-    
+
     if (!existingAddress) {
       // If address doesn't exist, insert it into DepositAddresses
       await depositAddressCollection.insertOne({ address: tx.to, timestamp: new Date(), isActive: false });
@@ -73,12 +84,12 @@ async function storeTransactionInDB(tx, db) {
     console.log("Transaction stored in MongoDB with _id:", result.insertedId);
   } catch (error) {
     console.error("Error storing transaction in MongoDB:", error.message);
-    throw error; // Rethrow the error to handle it further up the call stack
+    throw error;
   }
 }
 
 // Function to track ETH deposits using the method
-async function startTrackingDeposits(db) {
+async function startTrackingDeposits() {
   const provider = ethers.getDefaultProvider(INFURA_URL);
   const exchangeWallets = config.exchangeWallets.map((wallet) => wallet.address.toLowerCase());
 
@@ -131,7 +142,7 @@ To: <code>${shortTo}</code>\n
                     amountInEth,
                     hash: tx.hash,
                     timestamp: new Date()
-                  }, db);
+                  });
                 }
               } else {
                 console.log(chalk.white(`Amount: 0 wei`));
@@ -154,12 +165,6 @@ To: <code>${shortTo}</code>\n
     } catch (error) {
       console.error(chalk.red(`Error processing block ${blockNumber}:`), error.message);
     }
-
-    try {
-      await startTrackingDeposits(db);
-    } catch (error) {
-      console.error(chalk.red("Error in deposit tracking:"), error);
-    }
   };
 
   provider.once("block", handleBlock);
@@ -177,6 +182,16 @@ To: <code>${shortTo}</code>\n
   process.once("SIGINT", handleSigint);
 }
 
+// Initialize and start tracking deposits
+(async () => {
+  try {
+    await client.connect();
+    await startTrackingDeposits();
+  } catch (error) {
+    console.error("Error during initialization:", error);
+  }
+})();
+
 module.exports = {
-  startTrackingDeposits
+  startTrackingDeposits,
 };
