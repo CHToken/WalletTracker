@@ -154,15 +154,9 @@ To: <code>${shortTo}</code>\n
     } catch (error) {
       console.error(chalk.red(`Error processing block ${blockNumber}:`), error.message);
     }
-
-    try {
-      await startTrackingDeposits(db);
-    } catch (error) {
-      console.error(chalk.red("Error in deposit tracking:"), error);
-    }
   };
 
-  provider.once("block", handleBlock);
+  provider.on("block", handleBlock);
 
   provider.on("error", (error) => {
     console.error(chalk.red("Provider error:"), error);
@@ -174,7 +168,9 @@ To: <code>${shortTo}</code>\n
     process.exit(0);
   };
 
-  process.once("SIGINT", handleSigint);
+  if (process.listenerCount("SIGINT") === 0) {
+    process.once("SIGINT", handleSigint);
+  }
 }
 
 module.exports = {
