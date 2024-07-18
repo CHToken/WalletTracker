@@ -59,7 +59,7 @@ async function getTransactionCount(address) {
 
 async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSymbol, tokenDecimals, platform, tokenCreationDate) {
   try {
-    const transactionCount = await getTransactionCount(tx.from); // Include the current transaction
+    const transactionCount = await getTransactionCount(tx.from);
     console.log(`Address ${tx.from} has ${transactionCount} in telegram notification transactions.`);
 
     if (transactionCount > 15) {
@@ -166,7 +166,7 @@ async function removeInactiveAddresses() {
       isActive: false,
     }).toArray();
 
-    const countInactive = inactiveAddresses.length; // Count of addresses to be removed
+    const countInactive = inactiveAddresses.length;
 
     // Log the inactive addresses found
     console.log("Inactive addresses found:", inactiveAddresses);
@@ -202,7 +202,7 @@ async function notifyNoTransactionsFound(blockNumber, trackedAddresses) {
   const chalk = await importChalk();
   console.log(chalk.blue(`Finished scanning block ${blockNumber}. No transactions found for tracked addresses.`));
   const message = `Finished scanning block ${blockNumber}. No transactions found for tracked addresses. Total Address Count is ${trackedAddresses.length}`;
-  await sendTelegramNots(message); // Use the default chatId for notifications
+  await sendTelegramNots(message); 
 }
 
 // Function to get the token contract creation date using Etherscan API
@@ -262,7 +262,7 @@ async function SwapTrack() {
     // Periodically remove inactive addresses
     setInterval(async () => {
       await removeInactiveAddresses();
-    }, 60 * 60 * 1000); // Check every 1 hour
+    }, 30 * 60 * 1000); // Check every 30 minutes
 
     // Subscribe to new blocks
     provider.on("block", async (blockNumber) => {
