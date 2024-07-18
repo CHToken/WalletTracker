@@ -160,7 +160,7 @@ async function sendTelegramMessage(tx, decodedLogs) {
     const toAddress = `<a href="${toLink}">MEV BOT (${tx.to})</a>`;
 
     const logDetails = await Promise.all(decodedLogs.map(async log => {
-      let amountIn, amountOut, tokenIn, tokenInDetails, tokenOut, tokenOutDetails;
+      let amountIn, amountOut, tokenInDetails, tokenOut, tokenOutDetails;
       if (log.platform === "Uniswap V2") {
         amountIn = log.log.args.amount1In;
         amountOut = log.log.args.amount0Out;
