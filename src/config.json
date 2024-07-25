@@ -17,6 +17,10 @@
       "tag": "OKX 3"
     },
     {
+      "address": "0xD7efCbB86eFdD9E8dE014dafA5944AaE36E817e4",
+      "tag": "OKX 25"
+    },
+    {
       "address": "0xBf94F0AC752C739F623C463b5210a7fb2cbb420B",
       "tag": "OKX 24"
     },
@@ -89,8 +93,28 @@
       "tag": "BINANCE 17"
     },
     {
+      "address": "0x28C6c06298d514Db089934071355E5743bf21d60",
+      "tag": "BINANCE 14"
+    },
+    {
+      "address": "0xeB6c4bE4b92a52e969F4bF405025D997703D5383",
+      "tag": "BitBank 14"
+    },
+    {
       "address": "0xfa9f7a1cBfBCB688729c522b4F0905CcF4d26D25",
       "tag": "LBANK 7"
+    },
+    {
+      "address": "0xf60c2Ea62EDBfE808163751DD0d8693DCb30019c",
+      "tag": "BINANCE US"
+    },
+    {
+      "address": "0x77134cbC06cB00b66F4c7e623D5fdBF6777635EC",
+      "tag": "BITFINEX"
+    },
+    {
+      "address": "0x46340b20830761efd32832A74d7169B29FEB9758",
+      "tag": "CRYPTOCOM 2"
     },
     {
       "address": "0xf89d7b9c864f589bbF53a82105107622B35EaA40",

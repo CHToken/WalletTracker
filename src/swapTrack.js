@@ -53,62 +53,13 @@ async function getTransactionCount(address) {
   const url = `https://api.etherscan.io/api?module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&sort=asc&apikey=${process.env.ETHERSCAN_API_KEY}`;
   const response = await axios.get(url);
   const transactions = response.data.result;
-  console.log(`Address ${address} has ${transactions.length} before sending telegram notification.`);
+  console.log(`Address ${address} has ${transactions.length} transactions.`);
   return transactions.length;
 }
 
-async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSymbol, tokenDecimals, platform, tokenCreationDate) {
+async function sendTelegramMessage(message) {
   try {
-    const transactionCount = await getTransactionCount(tx.from);
-    console.log(`Address ${tx.from} has ${transactionCount} in telegram notification transactions.`);
-
-    if (transactionCount > 15) {
-      console.log(`Skipping notification for address ${tx.from} with ${transactionCount} transactions.`);
-      return;
-    }
-
-    console.log("Sending Telegram message...");
-    const valueInEth = weiToEth(tx.value.toString());
-    const etherscanLink = `https://etherscan.io/tx/${tx.hash}`;
-    const tokenAge = formatTokenAge(tokenCreationDate);
-    console.log("Token Age: ", tokenAge);
-    console.log("Value in ETH: ", valueInEth);
-    console.log("Transaction Hash: ", tx.hash);
-    console.log("Transaction Count: ", transactionCount);
-
-    if (valueInEth === 0.4) {
-      const message = `
-<b>${platform} Buy Detected ✅</b>
-
-<b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>\n
-<b>Block Number:</b> ${tx.blockNumber}
-<b>From:</b> <code>${tx.from}</code>
-<b>To:</b> <code>${tx.to}</code>\n
-<b>Value:</b> <b>${valueInEth} ETH</b>\n
-<b>Token:</b> ${tokenName} (${tokenSymbol})
-<b>Decimals:</b> ${tokenDecimals}
-<b>Token Contract:</b> <a href="https://etherscan.io/address/${tokenContractAddress}">${tokenContractAddress}</a>
-<b>Token Age:</b> ${tokenAge}
-<b>Transaction Count:</b> ${transactionCount}
-`;
-      await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
-    } else if (valueInEth > 0.4) {
-      const message = `
-<b>${platform} Buy Detected ✅</b>
-
-<b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>\n
-<b>Block Number:</b> ${tx.blockNumber}
-<b>From:</b> <code>${tx.from}</code>
-<b>To:</b> <code>${tx.to}</code>\n
-<b>Value:</b> <b>${valueInEth} ETH</b>\n
-<b>Token:</b> ${tokenName} (${tokenSymbol})
-<b>Decimals:</b> ${tokenDecimals}
-<b>Token Contract:</b> <a href="https://etherscan.io/address/${tokenContractAddress}">${tokenContractAddress}</a>
-<b>Token Age:</b> ${tokenAge}
-<b>Transaction Count:</b> ${transactionCount}
-`;
-      await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
-    }
+    await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
   } catch (error) {
     const chalk = await importChalk();
     console.error(chalk.red("Error sending Telegram message:"), error.message);
@@ -262,7 +213,26 @@ async function SwapTrack() {
     // Periodically remove inactive addresses
     setInterval(async () => {
       await removeInactiveAddresses();
-    }, 30 * 60 * 1000); // Check every 30 minutes
+    }, 60 * 60 * 1000); // Check every 60 minutes
+
+    // Create a map to store token accumulation data
+    const tokenAccumulation = new Map();
+
+    // Function to reset the token accumulation data hourly
+    setInterval(async () => {
+      for (const [tokenAddress, data] of tokenAccumulation.entries()) {
+        const { tokenName, totalEth, walletAddresses } = data;
+        const message = `
+<b>Hourly Token Accumulation Summary</b>
+
+<b>Token:</b> ${tokenName} (${tokenAddress})
+<b>Total Wallets:</b> ${walletAddresses.size}
+<b>Total ETH Purchased:</b> ${totalEth.toFixed(5)} ETH
+`;
+        await sendTelegramMessage(message);
+      }
+      tokenAccumulation.clear();
+    }, 60 * 60 * 1000); // Reset every hour
 
     // Subscribe to new blocks
     provider.on("block", async (blockNumber) => {
@@ -326,18 +296,11 @@ async function SwapTrack() {
                   )
                 ) {
                   // Log the transaction details
-                  const txReceipt = await provider.getTransactionReceipt(
-                    tx.hash
-                  );
-                  const tokenContractAddress =
-                    parseTokenContractAddressFromLogs(txReceipt.logs);
+                  const txReceipt = await provider.getTransactionReceipt(tx.hash);
+                  const tokenContractAddress = parseTokenContractAddressFromLogs(txReceipt.logs);
 
                   if (!tokenContractAddress) {
-                    console.log(
-                      chalk.yellow(
-                        "Unable to extract token contract address from transaction logs."
-                      )
-                    );
+                    console.log(chalk.yellow("Unable to extract token contract address from transaction logs."));
                     continue;
                   }
 
@@ -356,77 +319,50 @@ async function SwapTrack() {
                   const tokenDecimals = await tokenContract.decimals();
 
                   // Check the token contract creation date
-                  const tokenCreationDate = await getTokenCreationDate(
-                    tokenContractAddress
-                  );
+                  const tokenCreationDate = await getTokenCreationDate(tokenContractAddress);
                   const fourteenDaysAgo = new Date();
                   fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
 
                   if (tokenCreationDate > fourteenDaysAgo) {
                     foundTransaction = true;
 
-                    // Log the transaction details and send notification
                     // Determine if it's a V3, V2, KyberSwap, or 1Inch transaction
                     let platform = "Unknown Platform";
 
                     if (uniswapV2MethodInputs.includes(tx.data.substring(0, 10))) {
                       platform = "Uniswap V2";
-                      console.log(chalk.blue(`Uniswap V2 input found in transaction: ${tx.hash}`)); // Added log statement
-                    } else if (
-                      tx.to.toLowerCase() === uniswapV3RouterAddress.toLowerCase()
-                    ) {
+                      console.log(chalk.blue(`Uniswap V2 input found in transaction: ${tx.hash}`));
+                    } else if (tx.to.toLowerCase() === uniswapV3RouterAddress.toLowerCase()) {
                       platform = "Uniswap V3";
-                      const valueInEth = weiToEth(tx.value.toString());
-                      if (valueInEth === 0) {
-                        console.log(chalk.blue(`Skipping Uniswap V3 transaction with 0 ETH: ${tx.hash}`)); // Log statement
-                        continue; // Skip notification for 0 ETH Uniswap V3 transactions
-                      }
-                    } else if (
-                      tx.to.toLowerCase() === kyberSwapRouterAddress.toLowerCase()
-                    ) {
+                    } else if (tx.to.toLowerCase() === kyberSwapRouterAddress.toLowerCase()) {
                       platform = "KyberSwap";
-                      const valueInEth = weiToEth(tx.value.toString());
-                      if (valueInEth === 0) {
-                        console.log(chalk.blue(`Skipping KyberSwap transaction with 0 ETH: ${tx.hash}`)); // Log statement
-                        continue; // Skip notification for 0 ETH KyberSwap transactions
-                      }
-                    } else if (
-                      tx.to.toLowerCase() === oneInchSwapRouterAddress.toLowerCase()
-                    ) {
+                    } else if (tx.to.toLowerCase() === oneInchSwapRouterAddress.toLowerCase()) {
                       platform = "1Inch Swap";
-                      const valueInEth = weiToEth(tx.value.toString());
-                      if (valueInEth === 0) {
-                        console.log(chalk.blue(`Skipping 1Inch Swap transaction with 0 ETH: ${tx.hash}`)); // Log statement
-                        continue; // Skip notification for 0 ETH 1Inch transactions
-                      }
                     }
 
-                    // Send Telegram message with transaction and token details
-                    await sendTelegramMessage(
-                      tx,
-                      tokenContractAddress,
-                      tokenName,
-                      tokenSymbol,
-                      tokenDecimals,
-                      platform,
-                      tokenCreationDate
-                    );
+                    const valueInEth = weiToEth(tx.value.toString());
+
+                    // Update token accumulation data
+                    if (!tokenAccumulation.has(tokenContractAddress)) {
+                      tokenAccumulation.set(tokenContractAddress, {
+                        tokenName: `${tokenName} (${tokenSymbol})`,
+                        totalEth: 0,
+                        walletAddresses: new Set(),
+                      });
+                    }
+
+                    const tokenData = tokenAccumulation.get(tokenContractAddress);
+                    tokenData.totalEth += valueInEth;
+                    tokenData.walletAddresses.add(tx.from.toLowerCase());
+                    tokenAccumulation.set(tokenContractAddress, tokenData);
                   } else {
-                    console.log(
-                      chalk.yellow(
-                        `Skipping notification for token ${tokenName} as its contract age is more than 14 days.`
-                      )
-                    );
+                    console.log(chalk.yellow(`Skipping notification for token ${tokenName} as its contract age is more than 14 days.`));
                     await sendTelegramNots(`Token ${tokenName} at address ${tokenContractAddress} is more than 14 days old.`);
                   }
                 }
               }
             } catch (error) {
-              console.error(
-                chalk.red(
-                  `Error processing transaction ${txHash} in block ${blockNumber}`
-                )
-              );
+              console.error(chalk.red(`Error processing transaction ${txHash} in block ${blockNumber}`));
             }
           }
 
