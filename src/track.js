@@ -3,6 +3,7 @@ const { ethers } = require("ethers");
 const fs = require("fs");
 const path = require("path");
 const TelegramBot = require("node-telegram-bot-api");
+const MongoClient = require('mongodb').MongoClient;
 require('dotenv').config();
 
 // Construct the absolute path to config.json
@@ -13,6 +14,7 @@ const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_DEPOSIT_CHANNEL_ID = process.env.TELEGRAM_DEPOSIT_CHANNEL_ID;
 const INFURA_URL = process.env.INFURA_URL;
+const MONGODB_URL = process.env.MONGODB_URL;
 
 // Initialize Telegram Bot
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
@@ -72,13 +74,34 @@ async function storeTransactionInDB(tx, db) {
     const result = await collection.insertOne(tx);
     console.log("Transaction stored in MongoDB with _id:", result.insertedId);
   } catch (error) {
-    console.error("Error storing transaction in MongoDB:", error.message);
+    console.error("Error storing transaction in MongoDB in tracking:", error.message);
     throw error; // Rethrow the error to handle it further up the call stack
   }
 }
 
+// Function to connect to MongoDB with retry logic
+async function connectToDatabase(retries = 5, delay = 5000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const client = await MongoClient.connect(MONGODB_URL);
+      console.log("Connected to MongoDB");
+      return client.db();
+    } catch (error) {
+      console.error(`Failed to connect to MongoDB (attempt ${i + 1} of ${retries}):`, error.message);
+      if (i < retries - 1) {
+        console.log(`Retrying in ${delay / 1000} seconds...`);
+        await new Promise(res => setTimeout(res, delay));
+      } else {
+        throw new Error("Failed to connect to MongoDB after multiple attempts");
+      }
+    }
+  }
+}
+
 // Function to track ETH deposits using the method
-async function startTrackingDeposits(db) {
+async function startTrackingDeposits() {
+  const db = await connectToDatabase();
+
   const provider = ethers.getDefaultProvider(INFURA_URL);
   const exchangeWallets = config.exchangeWallets.map((wallet) => wallet.address.toLowerCase());
 

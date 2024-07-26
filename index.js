@@ -18,7 +18,7 @@ async function removeOldAddresses(cutoffTime) {
   try {
     await client.connect();
     const database = client.db("blockchain");
-    const collection = database.collection("DepositAddresses");
+    const collection = database.collection("DepositTransactions");
 
     const query = { timestamp: { $lt: cutoffTime } };
 

@@ -249,6 +249,98 @@ async function getTokenCreationDate(tokenAddress) {
   }
 }
 
+async function getTokenSupply(tokenContractAddress) {
+  try {
+    const tokenContract = new ethers.Contract(
+      tokenContractAddress,
+      ["function totalSupply() view returns (uint256)"],
+      provider
+    );
+    const totalSupply = await tokenContract.totalSupply();
+    return totalSupply.toString();
+  } catch (error) {
+    console.error("Error fetching token supply:", error);
+    return "Unknown"; // Return a fallback value if there's an error
+  }
+}
+
+async function displayAccumulatingWallets() {
+  try {
+    // Connect to MongoDB
+    await client.connect();
+    const database = client.db("blockchain");
+    const transactionsCollection = database.collection("Transactions");
+
+    // Get current time and one hour ago
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 10 * 60 * 1000);
+
+    // Fetch transactions in the last hour
+    const transactions = await transactionsCollection.find({
+      timestamp: { $gte: oneHourAgo, $lt: now },
+      type: "buy",
+    }).toArray();
+
+    // Group transactions by wallet address
+    const walletGroups = transactions.reduce((acc, tx) => {
+      if (!acc[tx.from]) {
+        acc[tx.from] = [];
+      }
+      acc[tx.from].push(tx);
+      return acc;
+    }, {});
+
+    // Prepare the data for display
+    const walletData = Object.entries(walletGroups).map(([address, txs]) => {
+      return {
+        wallet: address,
+        transactions: txs.map(tx => ({
+          amount: weiToEth(tx.value),
+          time: tx.timestamp,
+          tokenSymbol: tx.tokenSymbol,
+          tokenName: tx.tokenName,
+          tokenContract: tx.tokenContract,
+        })),
+        transactionCount: txs.length,
+      };
+    });
+
+    // Create the message content
+    let message = "📌 <b>Buys Trades Analytics</b>\n\n";
+
+    for (const wallet of walletData) {
+      const firstTx = wallet.transactions[0];
+      const tokenSupply = await getTokenSupply(firstTx.tokenContract); // Fetch the token supply
+      message += `🏷 <b>${firstTx.tokenName}</b> (${firstTx.tokenSymbol})\n`;
+      message += `🔖 ${firstTx.tokenContract}\n\n`;
+      message += "<b>Token Details:</b>\n";
+      message += `🔗 <b>Chain:</b> ETH\n`;
+      message += `📃 <b>Contract:</b> <a href="https://etherscan.io/token/${firstTx.tokenContract}">${firstTx.tokenContract.slice(0, 6)}...${firstTx.tokenContract.slice(-4)}</a>\n`;
+      message += `🪙 <b>Supply:</b> ${tokenSupply}\n\n`;
+      message += "<b>Token Checksums:</b>\n";
+      message += `└ ⚙️ <b>Total Wallets:</b> ${walletData.length}\n\n`;
+      message += "👑 <b>Top 5 Wallets Buys</b>\n";
+      walletData.slice(0, 5).forEach((w, i) => {
+        message += `Wallet ${i + 1} Purchased: ${w.transactionCount} times\n`;
+      });
+      message += "\n<b>Token Stats:</b>\n";
+      message += `⏱ <b>Age:</b> ${formatTokenAge(firstTx.time)}\n\n`;
+      const totalVolume = wallet.transactions.reduce((acc, tx) => acc + tx.amount, 0);
+      message += `💠 <b>Volume (Total Buys for all wallets):</b> 1H : ${totalVolume.toFixed(2)} ETH\n\n`;
+      message += `🔎 <b>Scan</b> (<a href="https://etherscan.io/address/${firstTx.tokenContract}">Etherscan</a>) / <b>Chart</b> (<a href="https://etherscan.io/address/${firstTx.tokenContract}#code">Etherscan Chart</a>)\n`;
+      message += `📊 <b>Charts:</b> <a href="https://www.dexview.com/eth/${firstTx.tokenContract}">DEXView</a> | <a href="https://dexscreener.com/ethereum/${firstTx.tokenContract}">DEXScreener</a> | <a href="https://www.dextools.io/app/en/ether/pair-explorer/${firstTx.tokenContract}">DEXTools</a>\n`;
+      message += "════════════════════\n\n";
+    }
+
+    // Send the message to Telegram
+    await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+  } catch (error) {
+    console.error("Error displaying accumulating wallets:", error);
+  } finally {
+    await client.close();
+  }
+}
+
 async function SwapTrack() {
   try {
     // Connect to MongoDB
@@ -347,6 +439,7 @@ async function SwapTrack() {
                       "function name() view returns (string)",
                       "function symbol() view returns (string)",
                       "function decimals() view returns (uint8)",
+                      "function totalSupply() view returns (uint256)", // Added to fetch total supply
                     ],
                     provider
                   );
@@ -354,6 +447,7 @@ async function SwapTrack() {
                   const tokenName = await tokenContract.name();
                   const tokenSymbol = await tokenContract.symbol();
                   const tokenDecimals = await tokenContract.decimals();
+                  const tokenSupply = await tokenContract.totalSupply(); // Fetch total supply
 
                   // Check the token contract creation date
                   const tokenCreationDate = await getTokenCreationDate(
@@ -452,6 +546,9 @@ async function SwapTrack() {
       await client.close();
       process.exit(0);
     });
+
+    // Schedule the function to run every hour
+    setInterval(displayAccumulatingWallets, 10 * 60 * 1000);
 
   } catch (error) {
     const chalk = await importChalk();
