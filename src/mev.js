@@ -338,3 +338,5 @@ async function startMEVTracking() {
 module.exports = {
   startMEVTracking
 };
+
+// startMEVTracking();

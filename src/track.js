@@ -41,13 +41,10 @@ function getTagForAddress(address) {
 
 // Function to send notification to Telegram
 async function sendTelegramMessage(message, channelID) {
-  let chalk;
   try {
     await bot.sendMessage(channelID, message, { parse_mode: "HTML" });
   } catch (error) {
-    // console.error("Error sending Telegram message in track:", error.message);
-    chalk = (await import("chalk")).default;
-    console.error(chalk.grey("Error sending Telegram message in swap tracking:"), error.message);
+    console.error("Error sending Telegram message in tracking:", error.message);
   }
 }
 
@@ -75,7 +72,7 @@ async function storeTransactionInDB(tx, db) {
     const result = await collection.insertOne(tx);
     console.log("Transaction stored in MongoDB with _id:", result.insertedId);
   } catch (error) {
-    console.error("Error storing transaction in MongoDB in track:", error.message);
+    console.error("Error storing transaction in MongoDB:", error.message);
     throw error; // Rethrow the error to handle it further up the call stack
   }
 }
