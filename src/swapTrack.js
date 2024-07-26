@@ -76,7 +76,7 @@ async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSym
     console.log("Transaction Hash: ", tx.hash);
     console.log("Transaction Count: ", transactionCount);
 
-    if (valueInEth === 0.03) {
+    if (valueInEth === 0.4) {
       const message = `
 <b>${platform} Buy Detected ✅</b>
 
@@ -92,7 +92,7 @@ async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSym
 <b>Transaction Count:</b> ${transactionCount}
 `;
       await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
-    } else if (valueInEth > 0.03) {
+    } else if (valueInEth > 0.4) {
       const message = `
 <b>${platform} Buy Detected ✅</b>
 
