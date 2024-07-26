@@ -19,6 +19,7 @@ const bot = new TelegramBot(botToken, { polling: false });
 // MongoDB setup
 const mongoUri = process.env.MONGODB_URL;
 const client = new MongoClient(mongoUri);
+let isConnected = false;
 
 async function importChalk() {
   const chalk = await import("chalk");
@@ -101,7 +102,7 @@ Total Address Count is ${countInactive}
 
 async function removeInactiveAddresses() {
   try {
-    await client.connect();
+    await ensureMongoClientConnected();
     const collection = client.db("blockchain").collection("DepositAddresses");
 
     const cutoff = new Date();
@@ -146,15 +147,16 @@ async function removeInactiveAddresses() {
     console.error("Error removing inactive addresses:", error);
   } finally {
     await client.close();
+    isConnected = false;
   }
 }
 
-async function notifyNoTransactionsFound(blockNumber, trackedAddresses) {
-  const chalk = await importChalk();
-  console.log(chalk.blue(`Finished scanning block ${blockNumber}. No transactions found for tracked addresses.`));
-  const message = `Finished scanning block ${blockNumber}. No transactions found for tracked addresses. Total Address Count is ${trackedAddresses.length}`;
-  await sendTelegramNots(message); 
-}
+// async function notifyNoTransactionsFound(blockNumber, trackedAddresses) {
+//   const chalk = await importChalk();
+//   console.log(chalk.blue(`Finished scanning block ${blockNumber}. No transactions found for tracked addresses.`));
+//   const message = `Finished scanning block ${blockNumber}. No transactions found for tracked addresses. Total Address Count is ${trackedAddresses.length}`;
+//   await sendTelegramNots(message); 
+// }
 
 // Function to get the token contract creation date using Etherscan API
 async function getTokenCreationDate(tokenAddress) {
@@ -202,8 +204,8 @@ async function getTokenCreationDate(tokenAddress) {
 
 async function SwapTrack() {
   try {
-    // Connect to MongoDB
-    await client.connect();
+    // Ensure MongoDB client is connected
+    await ensureMongoClientConnected();
     const database = client.db("blockchain");
     const collection = database.collection("DepositAddresses");
 
@@ -221,18 +223,33 @@ async function SwapTrack() {
     // Function to reset the token accumulation data hourly
     setInterval(async () => {
       for (const [tokenAddress, data] of tokenAccumulation.entries()) {
-        const { tokenName, totalEth, walletAddresses } = data;
-        const message = `
+        const { tokenName, tokenSymbol, tokenDecimals, transactions } = data;
+
+        let message = `
 <b>Hourly Token Accumulation Summary</b>
 
-<b>Token:</b> ${tokenName} (${tokenAddress})
-<b>Total Wallets:</b> ${walletAddresses.size}
-<b>Total ETH Purchased:</b> ${totalEth.toFixed(5)} ETH
+<b>Token:</b> <a href="https://etherscan.io/token/${tokenAddress}">${tokenName} (${tokenSymbol})</a>
+<b>Token Contract:</b> <a href="https://etherscan.io/address/${tokenAddress}">${tokenAddress}</a>
+<b>Decimals:</b> ${tokenDecimals}
+<b>Total Buys:</b> ${transactions.length}
+
+<b>Details:</b>
 `;
+
+        transactions.forEach((tx, index) => {
+          message += `
+<b>Transaction ${index + 1}:</b>
+<b>Wallet:</b> <a href="https://etherscan.io/address/${tx.from}">${tx.from}</a>
+<b>Purchase Time:</b> ${moment(tx.timestamp * 1000).format('YYYY-MM-DD HH:mm:ss')}
+<b>Value in ETH:</b> ${weiToEth(tx.value)}
+<b>Transaction Hash:</b> <a href="https://etherscan.io/tx/${tx.hash}">${tx.hash}</a>
+`;
+        });
+
         await sendTelegramMessage(message);
       }
       tokenAccumulation.clear();
-    }, 60 * 60 * 1000); // Reset every hour
+    }, 5 * 60 * 1000); // Reset every hour
 
     // Subscribe to new blocks
     provider.on("block", async (blockNumber) => {
@@ -241,9 +258,7 @@ async function SwapTrack() {
 
       try {
         // Ensure MongoDB client is connected before processing the block
-        if (!client.connect()) {
-          await client.connect();
-        }
+        await ensureMongoClientConnected();
 
         const block = await provider.getBlock(blockNumber);
         if (block && block.transactions.length > 0) {
@@ -253,11 +268,16 @@ async function SwapTrack() {
 
           // Fetch tracked addresses from MongoDB
           const trackedAddresses = await collection.find({}).toArray();
+          
+          if (trackedAddresses.length === 0) {
+            await sendTelegramNots("No tracked addresses in the database.");
+            return;
+          }
+
           const trackedAddressSet = new Set(trackedAddresses.map(addr => addr.address.toLowerCase()));
 
-          for (const txHash of block.transactions) {
+          for (const tx of block.transactions) {
             try {
-              const tx = await provider.getTransaction(txHash);
               if (tx && tx.data) {
                 // List of method inputs to check for Uniswap V2
                 const uniswapV2MethodInputs = [
@@ -345,15 +365,20 @@ async function SwapTrack() {
                     // Update token accumulation data
                     if (!tokenAccumulation.has(tokenContractAddress)) {
                       tokenAccumulation.set(tokenContractAddress, {
-                        tokenName: `${tokenName} (${tokenSymbol})`,
-                        totalEth: 0,
-                        walletAddresses: new Set(),
+                        tokenName,
+                        tokenSymbol,
+                        tokenDecimals,
+                        transactions: [],
                       });
                     }
 
                     const tokenData = tokenAccumulation.get(tokenContractAddress);
-                    tokenData.totalEth += valueInEth;
-                    tokenData.walletAddresses.add(tx.from.toLowerCase());
+                    tokenData.transactions.push({
+                      from: tx.from.toLowerCase(),
+                      timestamp: block.timestamp,
+                      value: tx.value.toString(),
+                      hash: tx.hash,
+                    });
                     tokenAccumulation.set(tokenContractAddress, tokenData);
                   } else {
                     console.log(chalk.yellow(`Skipping notification for token ${tokenName} as its contract age is more than 14 days.`));
@@ -362,13 +387,13 @@ async function SwapTrack() {
                 }
               }
             } catch (error) {
-              console.error(chalk.red(`Error processing transaction ${txHash} in block ${blockNumber}`));
+              console.error(chalk.red(`Error processing transaction ${tx.hash} in block ${blockNumber}`));
             }
           }
 
-          if (!foundTransaction) {
-            await notifyNoTransactionsFound(blockNumber, trackedAddresses);
-          }
+          // if (!foundTransaction) {
+          //   await notifyNoTransactionsFound(blockNumber, trackedAddresses);
+          // }
         }
       } catch (error) {
         console.error(chalk.red(`Error processing block ${blockNumber}:`), error.message);
@@ -386,6 +411,7 @@ async function SwapTrack() {
       const chalk = await importChalk();
       console.log(chalk.yellow("SIGINT received. Stopping Uniswap transaction monitoring."));
       await client.close();
+      isConnected = false;
       process.exit(0);
     });
 
@@ -393,6 +419,13 @@ async function SwapTrack() {
     const chalk = await importChalk();
     console.error(chalk.red("Error in SwapTrack"), error);
     await sendTelegramNots(`Error in SwapTrack: ${error.message}`);
+  }
+}
+
+async function ensureMongoClientConnected() {
+  if (!isConnected) {
+    await client.connect();
+    isConnected = true;
   }
 }
 
