@@ -19,7 +19,6 @@ const bot = new TelegramBot(botToken, { polling: false });
 // MongoDB setup
 const mongoUri = process.env.MONGODB_URL;
 const client = new MongoClient(mongoUri);
-let isConnected = false;
 
 async function importChalk() {
   const chalk = await import("chalk");
@@ -54,13 +53,62 @@ async function getTransactionCount(address) {
   const url = `https://api.etherscan.io/api?module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&sort=asc&apikey=${process.env.ETHERSCAN_API_KEY}`;
   const response = await axios.get(url);
   const transactions = response.data.result;
-  console.log(`Address ${address} has ${transactions.length} transactions.`);
+  console.log(`Address ${address} has ${transactions.length} before sending telegram notification.`);
   return transactions.length;
 }
 
-async function sendTelegramMessage(message) {
+async function sendTelegramMessage(tx, tokenContractAddress, tokenName, tokenSymbol, tokenDecimals, platform, tokenCreationDate) {
   try {
-    await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+    const transactionCount = await getTransactionCount(tx.from);
+    console.log(`Address ${tx.from} has ${transactionCount} in telegram notification transactions.`);
+
+    if (transactionCount > 15) {
+      console.log(`Skipping notification for address ${tx.from} with ${transactionCount} transactions.`);
+      return;
+    }
+
+    console.log("Sending Telegram message...");
+    const valueInEth = weiToEth(tx.value.toString());
+    const etherscanLink = `https://etherscan.io/tx/${tx.hash}`;
+    const tokenAge = formatTokenAge(tokenCreationDate);
+    console.log("Token Age: ", tokenAge);
+    console.log("Value in ETH: ", valueInEth);
+    console.log("Transaction Hash: ", tx.hash);
+    console.log("Transaction Count: ", transactionCount);
+
+    if (valueInEth === 0.4) {
+      const message = `
+<b>${platform} Buy Detected ✅</b>
+
+<b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>\n
+<b>Block Number:</b> ${tx.blockNumber}
+<b>From:</b> <code>${tx.from}</code>
+<b>To:</b> <code>${tx.to}</code>\n
+<b>Value:</b> <b>${valueInEth} ETH</b>\n
+<b>Token:</b> ${tokenName} (${tokenSymbol})
+<b>Decimals:</b> ${tokenDecimals}
+<b>Token Contract:</b> <a href="https://etherscan.io/address/${tokenContractAddress}">${tokenContractAddress}</a>
+<b>Token Age:</b> ${tokenAge}
+<b>Transaction Count:</b> ${transactionCount}
+`;
+      await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+    } else if (valueInEth > 0.4) {
+      const message = `
+<b>${platform} Buy Detected ✅</b>
+
+<b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>\n
+<b>Block Number:</b> ${tx.blockNumber}
+<b>From:</b> <code>${tx.from}</code>
+<b>To:</b> <code>${tx.to}</code>\n
+<b>Value:</b> <b>${valueInEth} ETH</b>\n
+<b>Token:</b> ${tokenName} (${tokenSymbol})
+<b>Decimals:</b> ${tokenDecimals}
+<b>Token Contract:</b> <a href="https://etherscan.io/address/${tokenContractAddress}">${tokenContractAddress}</a>
+<b>Token Age:</b> ${tokenAge}
+<b>Transaction Count:</b> ${transactionCount}
+`;
+      await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+    }
   } catch (error) {
     const chalk = await importChalk();
     console.error(chalk.red("Error sending Telegram message:"), error.message);
@@ -102,7 +150,7 @@ Total Address Count is ${countInactive}
 
 async function removeInactiveAddresses() {
   try {
-    await ensureMongoClientConnected();
+    await client.connect();
     const collection = client.db("blockchain").collection("DepositAddresses");
 
     const cutoff = new Date();
@@ -147,16 +195,15 @@ async function removeInactiveAddresses() {
     console.error("Error removing inactive addresses:", error);
   } finally {
     await client.close();
-    isConnected = false;
   }
 }
 
-// async function notifyNoTransactionsFound(blockNumber, trackedAddresses) {
-//   const chalk = await importChalk();
-//   console.log(chalk.blue(`Finished scanning block ${blockNumber}. No transactions found for tracked addresses.`));
-//   const message = `Finished scanning block ${blockNumber}. No transactions found for tracked addresses. Total Address Count is ${trackedAddresses.length}`;
-//   await sendTelegramNots(message); 
-// }
+async function notifyNoTransactionsFound(blockNumber, trackedAddresses) {
+  const chalk = await importChalk();
+  console.log(chalk.blue(`Finished scanning block ${blockNumber}. No transactions found for tracked addresses.`));
+  const message = `Finished scanning block ${blockNumber}. No transactions found for tracked addresses. Total Address Count is ${trackedAddresses.length}`;
+  await sendTelegramNots(message); 
+}
 
 // Function to get the token contract creation date using Etherscan API
 async function getTokenCreationDate(tokenAddress) {
@@ -204,8 +251,8 @@ async function getTokenCreationDate(tokenAddress) {
 
 async function SwapTrack() {
   try {
-    // Ensure MongoDB client is connected
-    await ensureMongoClientConnected();
+    // Connect to MongoDB
+    await client.connect();
     const database = client.db("blockchain");
     const collection = database.collection("DepositAddresses");
 
@@ -215,41 +262,7 @@ async function SwapTrack() {
     // Periodically remove inactive addresses
     setInterval(async () => {
       await removeInactiveAddresses();
-    }, 60 * 60 * 1000); // Check every 60 minutes
-
-    // Create a map to store token accumulation data
-    const tokenAccumulation = new Map();
-
-    // Function to reset the token accumulation data hourly
-    setInterval(async () => {
-      for (const [tokenAddress, data] of tokenAccumulation.entries()) {
-        const { tokenName, tokenSymbol, tokenDecimals, transactions } = data;
-
-        let message = `
-<b>Hourly Token Accumulation Summary</b>
-
-<b>Token:</b> <a href="https://etherscan.io/token/${tokenAddress}">${tokenName} (${tokenSymbol})</a>
-<b>Token Contract:</b> <a href="https://etherscan.io/address/${tokenAddress}">${tokenAddress}</a>
-<b>Decimals:</b> ${tokenDecimals}
-<b>Total Buys:</b> ${transactions.length}
-
-<b>Details:</b>
-`;
-
-        transactions.forEach((tx, index) => {
-          message += `
-<b>Transaction ${index + 1}:</b>
-<b>Wallet:</b> <a href="https://etherscan.io/address/${tx.from}">${tx.from}</a>
-<b>Purchase Time:</b> ${moment(tx.timestamp * 1000).format('YYYY-MM-DD HH:mm:ss')}
-<b>Value in ETH:</b> ${weiToEth(tx.value)}
-<b>Transaction Hash:</b> <a href="https://etherscan.io/tx/${tx.hash}">${tx.hash}</a>
-`;
-        });
-
-        await sendTelegramMessage(message);
-      }
-      tokenAccumulation.clear();
-    }, 5 * 60 * 1000); // Reset every hour
+    }, 30 * 60 * 1000); // Check every 30 minutes
 
     // Subscribe to new blocks
     provider.on("block", async (blockNumber) => {
@@ -258,7 +271,9 @@ async function SwapTrack() {
 
       try {
         // Ensure MongoDB client is connected before processing the block
-        await ensureMongoClientConnected();
+        if (!client.connect()) {
+          await client.connect();
+        }
 
         const block = await provider.getBlock(blockNumber);
         if (block && block.transactions.length > 0) {
@@ -268,16 +283,11 @@ async function SwapTrack() {
 
           // Fetch tracked addresses from MongoDB
           const trackedAddresses = await collection.find({}).toArray();
-          
-          if (trackedAddresses.length === 0) {
-            await sendTelegramNots("No tracked addresses in the database.");
-            return;
-          }
-
           const trackedAddressSet = new Set(trackedAddresses.map(addr => addr.address.toLowerCase()));
 
-          for (const tx of block.transactions) {
+          for (const txHash of block.transactions) {
             try {
+              const tx = await provider.getTransaction(txHash);
               if (tx && tx.data) {
                 // List of method inputs to check for Uniswap V2
                 const uniswapV2MethodInputs = [
@@ -316,11 +326,18 @@ async function SwapTrack() {
                   )
                 ) {
                   // Log the transaction details
-                  const txReceipt = await provider.getTransactionReceipt(tx.hash);
-                  const tokenContractAddress = parseTokenContractAddressFromLogs(txReceipt.logs);
+                  const txReceipt = await provider.getTransactionReceipt(
+                    tx.hash
+                  );
+                  const tokenContractAddress =
+                    parseTokenContractAddressFromLogs(txReceipt.logs);
 
                   if (!tokenContractAddress) {
-                    console.log(chalk.yellow("Unable to extract token contract address from transaction logs."));
+                    console.log(
+                      chalk.yellow(
+                        "Unable to extract token contract address from transaction logs."
+                      )
+                    );
                     continue;
                   }
 
@@ -339,61 +356,83 @@ async function SwapTrack() {
                   const tokenDecimals = await tokenContract.decimals();
 
                   // Check the token contract creation date
-                  const tokenCreationDate = await getTokenCreationDate(tokenContractAddress);
+                  const tokenCreationDate = await getTokenCreationDate(
+                    tokenContractAddress
+                  );
                   const fourteenDaysAgo = new Date();
                   fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
 
                   if (tokenCreationDate > fourteenDaysAgo) {
                     foundTransaction = true;
 
+                    // Log the transaction details and send notification
                     // Determine if it's a V3, V2, KyberSwap, or 1Inch transaction
                     let platform = "Unknown Platform";
 
                     if (uniswapV2MethodInputs.includes(tx.data.substring(0, 10))) {
                       platform = "Uniswap V2";
-                      console.log(chalk.blue(`Uniswap V2 input found in transaction: ${tx.hash}`));
-                    } else if (tx.to.toLowerCase() === uniswapV3RouterAddress.toLowerCase()) {
+                      console.log(chalk.blue(`Uniswap V2 input found in transaction: ${tx.hash}`)); // Added log statement
+                    } else if (
+                      tx.to.toLowerCase() === uniswapV3RouterAddress.toLowerCase()
+                    ) {
                       platform = "Uniswap V3";
-                    } else if (tx.to.toLowerCase() === kyberSwapRouterAddress.toLowerCase()) {
+                      const valueInEth = weiToEth(tx.value.toString());
+                      if (valueInEth === 0) {
+                        console.log(chalk.blue(`Skipping Uniswap V3 transaction with 0 ETH: ${tx.hash}`)); // Log statement
+                        continue; // Skip notification for 0 ETH Uniswap V3 transactions
+                      }
+                    } else if (
+                      tx.to.toLowerCase() === kyberSwapRouterAddress.toLowerCase()
+                    ) {
                       platform = "KyberSwap";
-                    } else if (tx.to.toLowerCase() === oneInchSwapRouterAddress.toLowerCase()) {
+                      const valueInEth = weiToEth(tx.value.toString());
+                      if (valueInEth === 0) {
+                        console.log(chalk.blue(`Skipping KyberSwap transaction with 0 ETH: ${tx.hash}`)); // Log statement
+                        continue; // Skip notification for 0 ETH KyberSwap transactions
+                      }
+                    } else if (
+                      tx.to.toLowerCase() === oneInchSwapRouterAddress.toLowerCase()
+                    ) {
                       platform = "1Inch Swap";
+                      const valueInEth = weiToEth(tx.value.toString());
+                      if (valueInEth === 0) {
+                        console.log(chalk.blue(`Skipping 1Inch Swap transaction with 0 ETH: ${tx.hash}`)); // Log statement
+                        continue; // Skip notification for 0 ETH 1Inch transactions
+                      }
                     }
 
-                    const valueInEth = weiToEth(tx.value.toString());
-
-                    // Update token accumulation data
-                    if (!tokenAccumulation.has(tokenContractAddress)) {
-                      tokenAccumulation.set(tokenContractAddress, {
-                        tokenName,
-                        tokenSymbol,
-                        tokenDecimals,
-                        transactions: [],
-                      });
-                    }
-
-                    const tokenData = tokenAccumulation.get(tokenContractAddress);
-                    tokenData.transactions.push({
-                      from: tx.from.toLowerCase(),
-                      timestamp: block.timestamp,
-                      value: tx.value.toString(),
-                      hash: tx.hash,
-                    });
-                    tokenAccumulation.set(tokenContractAddress, tokenData);
+                    // Send Telegram message with transaction and token details
+                    await sendTelegramMessage(
+                      tx,
+                      tokenContractAddress,
+                      tokenName,
+                      tokenSymbol,
+                      tokenDecimals,
+                      platform,
+                      tokenCreationDate
+                    );
                   } else {
-                    console.log(chalk.yellow(`Skipping notification for token ${tokenName} as its contract age is more than 14 days.`));
+                    console.log(
+                      chalk.yellow(
+                        `Skipping notification for token ${tokenName} as its contract age is more than 14 days.`
+                      )
+                    );
                     await sendTelegramNots(`Token ${tokenName} at address ${tokenContractAddress} is more than 14 days old.`);
                   }
                 }
               }
             } catch (error) {
-              console.error(chalk.red(`Error processing transaction ${tx.hash} in block ${blockNumber}`));
+              console.error(
+                chalk.red(
+                  `Error processing transaction ${txHash} in block ${blockNumber}`
+                )
+              );
             }
           }
 
-          // if (!foundTransaction) {
-          //   await notifyNoTransactionsFound(blockNumber, trackedAddresses);
-          // }
+          if (!foundTransaction) {
+            await notifyNoTransactionsFound(blockNumber, trackedAddresses);
+          }
         }
       } catch (error) {
         console.error(chalk.red(`Error processing block ${blockNumber}:`), error.message);
@@ -411,7 +450,6 @@ async function SwapTrack() {
       const chalk = await importChalk();
       console.log(chalk.yellow("SIGINT received. Stopping Uniswap transaction monitoring."));
       await client.close();
-      isConnected = false;
       process.exit(0);
     });
 
@@ -419,13 +457,6 @@ async function SwapTrack() {
     const chalk = await importChalk();
     console.error(chalk.red("Error in SwapTrack"), error);
     await sendTelegramNots(`Error in SwapTrack: ${error.message}`);
-  }
-}
-
-async function ensureMongoClientConnected() {
-  if (!isConnected) {
-    await client.connect();
-    isConnected = true;
   }
 }
 
