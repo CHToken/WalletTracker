@@ -127,7 +127,6 @@ async function sendTelegramNots(message) {
 // Function to parse ERC20 token contract address from transaction logs
 function parseTokenContractAddressFromLogs(logs) {
   if (logs && logs.length >= 3) {
-    // The token contract address is located in the third log entry
     return logs[2].address.toLowerCase();
   }
   return null;
