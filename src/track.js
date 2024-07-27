@@ -79,28 +79,8 @@ async function storeTransactionInDB(tx, db) {
   }
 }
 
-// Function to connect to MongoDB with retry logic
-async function connectToDatabase(retries = 5, delay = 5000) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const client = await MongoClient.connect(MONGODB_URL);
-      console.log("Connected to MongoDB");
-      return client.db();
-    } catch (error) {
-      console.error(`Failed to connect to MongoDB (attempt ${i + 1} of ${retries}):`, error.message);
-      if (i < retries - 1) {
-        console.log(`Retrying in ${delay / 1000} seconds...`);
-        await new Promise(res => setTimeout(res, delay));
-      } else {
-        throw new Error("Failed to connect to MongoDB after multiple attempts");
-      }
-    }
-  }
-}
-
 // Function to track ETH deposits using the method
-async function startTrackingDeposits() {
-  const db = await connectToDatabase();
+async function startTrackingDeposits(db) {
 
   const provider = ethers.getDefaultProvider(INFURA_URL);
   const exchangeWallets = config.exchangeWallets.map((wallet) => wallet.address.toLowerCase());

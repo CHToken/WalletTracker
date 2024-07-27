@@ -16,10 +16,6 @@ const chatId = process.env.TELEGRAM_SWAP_CHANNEL_ID;
 const deleteNotificationChatId = process.env.TELEGRAM_DELETE_ID;
 const bot = new TelegramBot(botToken, { polling: false });
 
-// MongoDB setup
-const mongoUri = process.env.MONGODB_URL;
-const client = new MongoClient(mongoUri);
-
 async function importChalk() {
   const chalk = await import("chalk");
   return chalk.default;
@@ -147,10 +143,9 @@ Total Address Count is ${countInactive}
   }
 }
 
-async function removeInactiveAddresses() {
+async function removeInactiveAddresses(db) {
   try {
-    await client.connect();
-    const collection = client.db("blockchain").collection("DepositAddresses");
+    const collection = db.collection("DepositAddresses");
 
     const cutoff = new Date();
     cutoff.setHours(cutoff.getHours() - 8);
@@ -192,8 +187,6 @@ async function removeInactiveAddresses() {
     console.log(`Inactive addresses count: ${countInactive}`);
   } catch (error) {
     console.error("Error removing inactive addresses:", error);
-  } finally {
-    await client.close();
   }
 }
 
@@ -248,19 +241,16 @@ async function getTokenCreationDate(tokenAddress) {
   }
 }
 
-async function SwapTrack() {
+async function SwapTrack(db) {
   try {
-    // Connect to MongoDB
-    await client.connect();
-    const database = client.db("blockchain");
-    const collection = database.collection("DepositAddresses");
+    const collection = db.collection("DepositAddresses");
 
     // Display bot running message
     await displayBotRunning();
 
     // Periodically remove inactive addresses
     setInterval(async () => {
-      await removeInactiveAddresses();
+      await removeInactiveAddresses(db);
     }, 30 * 60 * 1000); // Check every 30 minutes
 
     // Subscribe to new blocks
@@ -269,11 +259,6 @@ async function SwapTrack() {
       console.log(chalk.cyan(`New block received: ${blockNumber}`));
 
       try {
-        // Ensure MongoDB client is connected before processing the block
-        if (!client.connect()) {
-          await client.connect();
-        }
-
         const block = await provider.getBlock(blockNumber);
         if (block && block.transactions.length > 0) {
           console.log(chalk.cyan(`Block ${blockNumber} has ${block.transactions.length} transactions in SwapTrack.`));
@@ -448,7 +433,7 @@ async function SwapTrack() {
     process.once("SIGINT", async () => {
       const chalk = await importChalk();
       console.log(chalk.yellow("SIGINT received. Stopping Uniswap transaction monitoring."));
-      await client.close();
+      await db.client.close();
       process.exit(0);
     });
 
