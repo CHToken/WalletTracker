@@ -16,7 +16,7 @@ let client = new MongoClient(mongoUri);
 
 // Function to check and reconnect if the connection is not active
 async function ensureConnection() {
-  if (!client.isConnected()) {
+  if (!client.connect()) {
     client = new MongoClient(mongoUri);
     await client.connect();
     console.log("Reconnected to MongoDB");
