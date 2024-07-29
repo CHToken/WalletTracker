@@ -12,11 +12,20 @@ const chatId = process.env.TELEGRAM_CHAT_ID;
 const bot = new TelegramBot(botToken, { polling: true });
 
 const mongoUri = process.env.MONGODB_URL;
-const client = new MongoClient(mongoUri);
+let client = new MongoClient(mongoUri);
+
+// Function to check and reconnect if the connection is not active
+async function ensureConnection() {
+  if (!client.isConnected()) {
+    client = new MongoClient(mongoUri);
+    await client.connect();
+    console.log("Reconnected to MongoDB");
+  }
+}
 
 async function removeOldAddresses(cutoffTime) {
   try {
-    await client.connect();
+    await ensureConnection();
     const database = client.db("blockchain");
     const collection = database.collection("DepositTransactions");
 
@@ -85,16 +94,12 @@ bot.on('message', async (msg) => {
 
 (async () => {
   try {
-    // Connect to MongoDB
-    await client.connect();
+    await ensureConnection();
     const db = client.db('blockchain');
     console.log("Connected to MongoDB");
 
-    // Start tracking deposits
     await startTrackingDeposits(db);
-    // Start tracking swaps
     await SwapTrack(db);
-    // Start tracking MEV transactions
     await startMEVTracking();
   } catch (error) {
     console.error("Failed to start tracking:", error);
