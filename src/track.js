@@ -3,7 +3,7 @@ const { ethers } = require("ethers");
 const fs = require("fs");
 const path = require("path");
 const TelegramBot = require("node-telegram-bot-api");
-const MongoClient = require('mongodb').MongoClient;
+const { MongoClient } = require('mongodb');
 require('dotenv').config();
 
 // Construct the absolute path to config.json
@@ -18,6 +18,18 @@ const MONGODB_URL = process.env.MONGODB_URL;
 
 // Initialize Telegram Bot
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
+
+// MongoDB client
+let client = new MongoClient(MONGODB_URL);
+
+// Function to check and reconnect if the connection is not active
+async function ensureConnection() {
+  if (!client.connect()) {
+    client = new MongoClient(MONGODB_URL);
+    await client.connect();
+    console.log("Reconnected to MongoDB");
+  }
+}
 
 // Function to shorten an Ethereum address for display
 function shortenAddress(address) {
@@ -53,12 +65,13 @@ async function sendTelegramMessage(message, channelID) {
 // Function to store the transaction details in MongoDB
 async function storeTransactionInDB(tx, db) {
   try {
+    await ensureConnection(); // Ensure the MongoDB connection is active
     const collection = db.collection("DepositTransactions");
 
     // Check if the deposit address already exists in DepositAddresses
     const depositAddressCollection = db.collection("DepositAddresses");
     const existingAddress = await depositAddressCollection.findOne({ address: tx.to });
-    
+
     if (!existingAddress) {
       // If address doesn't exist, insert it into DepositAddresses
       await depositAddressCollection.insertOne({ address: tx.to, timestamp: new Date(), isActive: false });
@@ -81,7 +94,6 @@ async function storeTransactionInDB(tx, db) {
 
 // Function to track ETH deposits using the method
 async function startTrackingDeposits(db) {
-
   const provider = ethers.getDefaultProvider(INFURA_URL);
   const exchangeWallets = config.exchangeWallets.map((wallet) => wallet.address.toLowerCase());
 

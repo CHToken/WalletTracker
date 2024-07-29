@@ -43,8 +43,6 @@ async function removeOldAddresses(cutoffTime) {
     return oldAddresses;
   } catch (error) {
     console.error("Error retrieving and deleting old addresses:", error);
-  } finally {
-    await client.close();
   }
 }
 
