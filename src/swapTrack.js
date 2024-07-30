@@ -193,8 +193,6 @@ async function removeInactiveAddresses(db) {
 async function notifyNoTransactionsFound(blockNumber, trackedAddresses) {
   const chalk = await importChalk();
   console.log(chalk.blue(`Finished scanning block ${blockNumber}. No transactions found for tracked addresses.`));
-  // const message = `Finished scanning block ${blockNumber}. No transactions found for tracked addresses. Total Address Count is ${trackedAddresses.length}`;
-  // await sendTelegramNots(message); 
 }
 
 // Function to get the token contract creation date using Etherscan API
@@ -251,7 +249,7 @@ async function SwapTrack(db) {
     // Periodically remove inactive addresses
     setInterval(async () => {
       await removeInactiveAddresses(db);
-    }, 30 * 60 * 1000); // Check every 30 minutes
+    }, 60 * 60 * 1000); // Check every 60 minutes
 
     // Subscribe to new blocks
     provider.on("block", async (blockNumber) => {
@@ -401,7 +399,6 @@ async function SwapTrack(db) {
                         `Skipping notification for token ${tokenName} as its contract age is more than 14 days.`
                       )
                     );
-                    // await sendTelegramNots(`Token ${tokenName} at address ${tokenContractAddress} is more than 14 days old.`);
                   }
                 }
               }
