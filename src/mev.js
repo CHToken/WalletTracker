@@ -1,11 +1,11 @@
-// mev.js
 const { ethers } = require("ethers");
 const dotenv = require("dotenv");
 const TelegramBot = require("node-telegram-bot-api");
+const { setInterval } = require("timers");
 dotenv.config();
 
 const processedBlocks = new Set();
-const firstTransactionCache = new Set(); // Cache to track first transactions
+const newTokens = new Set(); // Cache to track newly purchased tokens within an hour
 
 // Set up Infura provider
 const infuraUrl = process.env.MEV_INFURA_URL;
@@ -197,6 +197,7 @@ async function sendTelegramMessage(tx, decodedLogs) {
 
       // Add to the cache to avoid duplicate notifications
       firstTransactionCache.add(tokenIn);
+      newTokens.add(tokenIn); // Add token to the new token set
 
       console.log(`First transaction detected for token: ${tokenIn}`);
 
@@ -334,6 +335,30 @@ async function startMEVTracking() {
     }
   });
 }
+
+// Function to send notification with the list of new tokens purchased within an hour
+async function sendNewTokensNotification() {
+  if (newTokens.size === 0) {
+    return;
+  }
+
+  const tokenDetailsList = await Promise.all(
+    Array.from(newTokens).map(async tokenAddress => {
+      const { name, symbol, decimals } = await getTokenDetails(tokenAddress);
+      return `<b>Token Name:</b> ${name}\n<b>Contract Address:</b> ${tokenAddress}\n<b>Decimals:</b> ${decimals}`;
+    })
+  );
+
+  const message = `
+<b>New Tokens Purchased Within The Last Hour 🕒</b>\n\n${tokenDetailsList.join("\n\n")}
+`;
+
+  await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+  newTokens.clear(); // Clear the set after sending the notification
+}
+
+// Send new tokens notification every hour
+setInterval(sendNewTokensNotification, 20 * 60 * 1000);
 
 module.exports = {
   startMEVTracking

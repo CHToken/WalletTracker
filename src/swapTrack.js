@@ -249,7 +249,7 @@ async function SwapTrack(db) {
     // Periodically remove inactive addresses
     setInterval(async () => {
       await removeInactiveAddresses(db);
-    }, 60 * 60 * 1000); // Check every 60 minutes
+    }, 15 * 60 * 1000); // Check every 60 minutes
 
     // Subscribe to new blocks
     provider.on("block", async (blockNumber) => {
