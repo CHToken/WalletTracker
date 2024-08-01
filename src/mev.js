@@ -203,11 +203,7 @@ async function sendTelegramMessage(tx, decodedLogs) {
       if (!hourlyFirstTransactions[tokenIn]) {
         hourlyFirstTransactions[tokenIn] = { buys: 0, sells: 0, name: tokenInDetails.name, symbol: tokenInDetails.symbol };
       }
-      if (amountIn > 0) {
-        hourlyFirstTransactions[tokenIn].buys += 1;
-      } else {
-        hourlyFirstTransactions[tokenIn].sells += 1;
-      }
+      hourlyFirstTransactions[tokenIn].buys += 1;
 
       console.log(`First transaction detected for token: ${tokenIn}`);
 
@@ -245,7 +241,7 @@ async function sendTelegramMessage(tx, decodedLogs) {
     await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
     console.log(`First transaction notification sent for token: ${tokenIn}`);
   } catch (error) {
-    console.error("Error sending Telegram message:", error.message);
+    console.error("Error sending Telegram message in mevbot:", error.message);
   }
 }
 
@@ -347,13 +343,14 @@ async function startMEVTracking() {
   });
 
   // Send summary every hour
-  setInterval(sendHourlySummary, 60 * 60 * 1000);
+  setInterval(sendHourlySummary, 10 * 60 * 1000);
 }
 
 // Function to send hourly summary
 async function sendHourlySummary() {
   try {
     if (Object.keys(hourlyFirstTransactions).length === 0) {
+      await bot.sendMessage(chatId, "No first transactions to report.", { parse_mode: "HTML" });
       console.log("No first transactions to report.");
       return;
     }
@@ -361,6 +358,7 @@ async function sendHourlySummary() {
     const filteredTransactions = Object.entries(hourlyFirstTransactions).filter(([tokenAddress, { buys, sells }]) => buys >= 10 || sells >= 10);
 
     if (filteredTransactions.length === 0) {
+      await bot.sendMessage(chatId, "No transactions meeting the threshold to report.", { parse_mode: "HTML" });
       console.log("No transactions meeting the threshold to report.");
       return;
     }
@@ -390,6 +388,7 @@ ${summary}
     }
   } catch (error) {
     console.error("Error sending hourly summary:", error.message);
+    await bot.sendMessage(chatId, "Error sending hourly summary: " + error.message, { parse_mode: "HTML" });
   }
 }
 
