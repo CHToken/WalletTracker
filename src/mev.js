@@ -1,11 +1,11 @@
 const { ethers } = require("ethers");
 const dotenv = require("dotenv");
 const TelegramBot = require("node-telegram-bot-api");
-const { setInterval } = require("timers");
 dotenv.config();
 
 const processedBlocks = new Set();
-const newTokens = new Set(); // Cache to track newly purchased tokens within an hour
+const firstTransactionCache = new Set(); // Cache to track first transactions
+const hourlyFirstTransactions = {}; // Store first transactions within the hour
 
 // Set up Infura provider
 const infuraUrl = process.env.MEV_INFURA_URL;
@@ -152,6 +152,7 @@ async function getFormattedBlockDateTime(blockNumber) {
 }
 
 async function sendTelegramMessage(tx, decodedLogs) {
+  let tokenIn = null;
   try {
     const etherscanLink = `https://etherscan.io/tx/${tx.hash}`;
     const fromLink = `https://etherscan.io/address/${tx.from}`;
@@ -163,7 +164,7 @@ async function sendTelegramMessage(tx, decodedLogs) {
     const toAddress = `<a href="${toLink}">MEV BOT (${tx.to})</a>`;
 
     const logDetails = await Promise.all(decodedLogs.map(async log => {
-      let amountIn, amountOut, tokenIn, tokenOut, tokenInDetails, tokenOutDetails;
+      let amountIn, amountOut, tokenOut, tokenInDetails, tokenOutDetails;
       if (log.platform === "Uniswap V2") {
         amountIn = log.log.args.amount1In;
         amountOut = log.log.args.amount0Out;
@@ -197,7 +198,16 @@ async function sendTelegramMessage(tx, decodedLogs) {
 
       // Add to the cache to avoid duplicate notifications
       firstTransactionCache.add(tokenIn);
-      newTokens.add(tokenIn); // Add token to the new token set
+
+      // Update the hourly list
+      if (!hourlyFirstTransactions[tokenIn]) {
+        hourlyFirstTransactions[tokenIn] = { buys: 0, sells: 0, name: tokenInDetails.name, symbol: tokenInDetails.symbol };
+      }
+      if (amountIn > 0) {
+        hourlyFirstTransactions[tokenIn].buys += 1;
+      } else {
+        hourlyFirstTransactions[tokenIn].sells += 1;
+      }
 
       console.log(`First transaction detected for token: ${tokenIn}`);
 
@@ -325,7 +335,8 @@ async function startMEVTracking() {
         block.transactions.map(txHash => provider.getTransaction(txHash))
       );
       for (const tx of transactions) {
-        if (tx && tx.from.toLowerCase() === fromAddress.toLowerCase() && tx.to && tx.to.toLowerCase() === toAddress.toLowerCase()) {
+        if (tx && typeof tx.from === "string" && tx.from.toLowerCase() === fromAddress.toLowerCase() &&
+            typeof tx.to === "string" && tx.to.toLowerCase() === toAddress.toLowerCase()) {
           console.log(`MEV BOT transaction detected: ${tx.hash}`);
           await getTransactionData(tx.hash);
         }
@@ -334,31 +345,53 @@ async function startMEVTracking() {
       console.error(`Error processing block ${blockNumber}:`, error.message);
     }
   });
+
+  // Send summary every hour
+  setInterval(sendHourlySummary, 60 * 60 * 1000);
 }
 
-// Function to send notification with the list of new tokens purchased within an hour
-async function sendNewTokensNotification() {
-  if (newTokens.size === 0) {
-    return;
-  }
+// Function to send hourly summary
+async function sendHourlySummary() {
+  try {
+    if (Object.keys(hourlyFirstTransactions).length === 0) {
+      console.log("No first transactions to report.");
+      return;
+    }
 
-  const tokenDetailsList = await Promise.all(
-    Array.from(newTokens).map(async tokenAddress => {
-      const { name, symbol, decimals } = await getTokenDetails(tokenAddress);
-      return `<b>Token Name:</b> ${name}\n<b>Contract Address:</b> ${tokenAddress}\n<b>Decimals:</b> ${decimals}`;
-    })
-  );
+    const filteredTransactions = Object.entries(hourlyFirstTransactions).filter(([tokenAddress, { buys, sells }]) => buys >= 10 || sells >= 10);
 
-  const message = `
-<b>New Tokens Purchased Within The Last Hour 🕒</b>\n\n${tokenDetailsList.join("\n\n")}
+    if (filteredTransactions.length === 0) {
+      console.log("No transactions meeting the threshold to report.");
+      return;
+    }
+
+    const summary = filteredTransactions.map(([tokenAddress, { buys, sells, name, symbol }]) => {
+      const etherscanLink = `https://etherscan.io/token/${tokenAddress}`;
+      return `<b><a href="${etherscanLink}">${name} (${symbol})</a>:</b> <code>${buys}</code> Buys, <code>${sells}</code> Sells`;
+    }).join("\n");
+
+    const message = `
+<b>📊 Hourly Summary of Significant Transactions 📊</b>
+
+Here are the tokens with at least 10 buys or 10 sells in the past hour:
+
+${summary}
+
+<i>Stay tuned for more updates!</i>
 `;
+    await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+    console.log("Hourly summary sent.");
 
-  await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
-  newTokens.clear(); // Clear the set after sending the notification
+    // Clear the hourly transactions
+    for (const key in hourlyFirstTransactions) {
+      if (hourlyFirstTransactions.hasOwnProperty(key)) {
+        delete hourlyFirstTransactions[key];
+      }
+    }
+  } catch (error) {
+    console.error("Error sending hourly summary:", error.message);
+  }
 }
-
-// Send new tokens notification every hour
-setInterval(sendNewTokensNotification, 20 * 60 * 1000);
 
 module.exports = {
   startMEVTracking
