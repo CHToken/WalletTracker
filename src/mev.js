@@ -1,6 +1,7 @@
 const { ethers } = require("ethers");
 const dotenv = require("dotenv");
 const TelegramBot = require("node-telegram-bot-api");
+const { LocalStorage } = require('node-localstorage');
 dotenv.config();
 
 const processedBlocks = new Set();
@@ -15,6 +16,9 @@ const provider = new ethers.getDefaultProvider(infuraUrl);
 const botToken = process.env.TELEGRAM_MEVBOT_TOKEN;
 const chatId = process.env.TELEGRAM_MEVSWAP_CHANNEL_ID;
 const bot = new TelegramBot(botToken, { polling: false });
+
+// Set up local storage
+const localStorage = new LocalStorage('./localstorage');
 
 // Define event signatures
 const uniswapV2EventSignature = ethers.id("Swap(address,uint256,uint256,uint256,uint256,address)");
@@ -199,6 +203,10 @@ async function sendTelegramMessage(tx, decodedLogs, title = "Transaction Detecte
       firstTransactionCache.add(tokenIn);
       trackedTokens.add(tokenIn);
 
+      // // Store token details in local storage
+      // const tokenDetails = { name: tokenInDetails.name, symbol: tokenInDetails.symbol, decimals: tokenInDetails.decimals, address: tokenIn };
+      // localStorage.setItem(tokenIn, JSON.stringify(tokenDetails));
+
       console.log(`First transaction detected for token: ${tokenIn}`);
 
       let firstTransactionDateTime = "";
@@ -210,6 +218,9 @@ async function sendTelegramMessage(tx, decodedLogs, title = "Transaction Detecte
       const name = log.platform === "Uniswap V2" ? tokenInDetails.name : tokenOutDetails.name;
       const symbol = log.platform === "Uniswap V2" ? tokenInDetails.symbol : tokenOutDetails.symbol;
       const decimals = log.platform === "Uniswap V2" ? tokenInDetails.decimals : tokenOutDetails.decimals;
+
+      const tokenDetails = { name: tokenInDetails.name, symbol: tokenInDetails.symbol, decimals: tokenInDetails.decimals, address: tokenIn };
+      localStorage.setItem(tokenIn, JSON.stringify(tokenDetails));
 
       return `<b>Platform:</b> ${log.platform}\n<b>Token Bought ✅:</b> ${name} (${symbol}, ${decimals} decimals) (${tokenIn})\n<b>Amount In:</b> ${amountInEth} ETH\n<b>Amount Out:</b> ${amountOutDecimal} ${symbol}\n<b>First Transaction:</b> Yes\n<b>Time:</b> ${firstTransactionDateTime}\n`;
     }));
