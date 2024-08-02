@@ -190,11 +190,16 @@ async function sendTelegramMessage(tx, decodedLogs, title = "Transaction Detecte
       // Check if it's the first transaction for the token by the tx.to address
       const isFirstTransaction = await isFirstTransactionForToken(tokenIn, tx.to, tx.blockNumber);
 
-      // Mark token as tracked if it's the first transaction
-      if (isFirstTransaction && !firstTransactionCache.has(tokenIn)) {
-        firstTransactionCache.add(tokenIn);
-        trackedTokens.add(tokenIn);
+      // Skip if it's not the first transaction for the token by the tx.to address
+      if (!isFirstTransaction || firstTransactionCache.has(tokenIn)) {
+        return null;
       }
+
+      // Add to the cache to avoid duplicate notifications and track the token
+      firstTransactionCache.add(tokenIn);
+      trackedTokens.add(tokenIn);
+
+      console.log(`First transaction detected for token: ${tokenIn}`);
 
       let firstTransactionDateTime = "";
       if (isFirstTransaction) {
@@ -206,7 +211,7 @@ async function sendTelegramMessage(tx, decodedLogs, title = "Transaction Detecte
       const symbol = log.platform === "Uniswap V2" ? tokenInDetails.symbol : tokenOutDetails.symbol;
       const decimals = log.platform === "Uniswap V2" ? tokenInDetails.decimals : tokenOutDetails.decimals;
 
-      return `<b>Platform:</b> ${log.platform}\n<b>Token Bought ✅:</b> ${name} (${symbol}, ${decimals} decimals) (${tokenIn})\n<b>Amount In:</b> ${amountInEth} ETH\n<b>Amount Out:</b> ${amountOutDecimal} ${symbol}\n<b>First Transaction:</b> ${isFirstTransaction ? 'Yes' : 'No'}\n${isFirstTransaction ? `<b>Time:</b> ${firstTransactionDateTime}` : ''}\n`;
+      return `<b>Platform:</b> ${log.platform}\n<b>Token Bought ✅:</b> ${name} (${symbol}, ${decimals} decimals) (${tokenIn})\n<b>Amount In:</b> ${amountInEth} ETH\n<b>Amount Out:</b> ${amountOutDecimal} ${symbol}\n<b>First Transaction:</b> Yes\n<b>Time:</b> ${firstTransactionDateTime}\n`;
     }));
 
     const filteredLogDetails = logDetails.filter(detail => detail !== null);
@@ -233,9 +238,8 @@ async function sendTelegramMessage(tx, decodedLogs, title = "Transaction Detecte
     for (const chunk of messageChunks) {
       await bot.sendMessage(chatId, chunk, { parse_mode: "HTML" });
     }
-    
-    console.log(`Notification sent for transaction: ${tx.hash}`);
-    await bot.sendMessage(chatId, `Notification sent for transaction: ${tx.hash}`);
+
+    console.log(`First transaction notification sent for token: ${tokenIn}`);
   } catch (error) {
     console.error("Error sending Telegram message:", error.message);
   }
@@ -327,14 +331,12 @@ async function monitorTrackedTokens(blockNumber) {
     for (const tx of transactions) {
       if (tx && trackedTokens.has(tx.to)) {
         console.log(`Tracked token transaction detected: ${tx.hash}`);
-        await bot.sendMessage(chatId, `Tracked token transaction detected: ${tx.hash}`);
         const receipt = await provider.getTransactionReceipt(tx.hash);
         const decodedLogs = decodeLogs(receipt.logs);
         await sendTelegramMessage(tx, decodedLogs, "Tracked Token Transaction Detected");
       }
     }
   } catch (error) {
-    await bot.sendMessage(chatId, `Error monitoring tracked tokens in block ${blockNumber}: ${error.message}`);
     console.error(`Error monitoring tracked tokens in block ${blockNumber}:`, error.message);
   }
 }
