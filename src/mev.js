@@ -5,7 +5,7 @@ dotenv.config();
 
 const processedBlocks = new Set();
 const firstTransactionCache = new Set(); // Cache to track first transactions
-const hourlyFirstTransactions = {}; // Store first transactions within the hour
+const trackedTokens = new Set(); // Track tokens with the first transaction marked as "Yes"
 
 // Set up Infura provider
 const infuraUrl = process.env.MEV_INFURA_URL;
@@ -151,8 +151,7 @@ async function getFormattedBlockDateTime(blockNumber) {
   }
 }
 
-async function sendTelegramMessage(tx, decodedLogs) {
-  let tokenIn = null;
+async function sendTelegramMessage(tx, decodedLogs, title = "Transaction Detected ✅") {
   try {
     const etherscanLink = `https://etherscan.io/tx/${tx.hash}`;
     const fromLink = `https://etherscan.io/address/${tx.from}`;
@@ -164,7 +163,7 @@ async function sendTelegramMessage(tx, decodedLogs) {
     const toAddress = `<a href="${toLink}">MEV BOT (${tx.to})</a>`;
 
     const logDetails = await Promise.all(decodedLogs.map(async log => {
-      let amountIn, amountOut, tokenOut, tokenInDetails, tokenOutDetails;
+      let amountIn, amountOut, tokenIn, tokenOut, tokenInDetails, tokenOutDetails;
       if (log.platform === "Uniswap V2") {
         amountIn = log.log.args.amount1In;
         amountOut = log.log.args.amount0Out;
@@ -191,21 +190,11 @@ async function sendTelegramMessage(tx, decodedLogs) {
       // Check if it's the first transaction for the token by the tx.to address
       const isFirstTransaction = await isFirstTransactionForToken(tokenIn, tx.to, tx.blockNumber);
 
-      // Skip if it's not the first transaction for the token by the tx.to address
-      if (!isFirstTransaction || firstTransactionCache.has(tokenIn)) {
-        return null;
+      // Mark token as tracked if it's the first transaction
+      if (isFirstTransaction && !firstTransactionCache.has(tokenIn)) {
+        firstTransactionCache.add(tokenIn);
+        trackedTokens.add(tokenIn);
       }
-
-      // Add to the cache to avoid duplicate notifications
-      firstTransactionCache.add(tokenIn);
-
-      // Update the hourly list
-      if (!hourlyFirstTransactions[tokenIn]) {
-        hourlyFirstTransactions[tokenIn] = { buys: 0, sells: 0, name: tokenInDetails.name, symbol: tokenInDetails.symbol };
-      }
-      hourlyFirstTransactions[tokenIn].buys += 1;
-
-      console.log(`First transaction detected for token: ${tokenIn}`);
 
       let firstTransactionDateTime = "";
       if (isFirstTransaction) {
@@ -230,7 +219,7 @@ async function sendTelegramMessage(tx, decodedLogs) {
     console.log("Sending Telegram message...");
 
     const message = `
-<b>Transaction Detected ✅</b>
+<b>${title}</b>
 
 <b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>\n
 <b>Block Number:</b> ${tx.blockNumber}
@@ -238,11 +227,27 @@ async function sendTelegramMessage(tx, decodedLogs) {
 <b>To:</b> ${toAddress}\n
 <b>Logs:</b>\n${filteredLogDetails.join("\n\n")}
 `;
-    await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
-    console.log(`First transaction notification sent for token: ${tokenIn}`);
+
+    // Split the message into chunks if it exceeds Telegram's message limit
+    const messageChunks = chunkString(message, 4096);
+    for (const chunk of messageChunks) {
+      await bot.sendMessage(chatId, chunk, { parse_mode: "HTML" });
+    }
+    
+    console.log(`Notification sent for transaction: ${tx.hash}`);
+    await bot.sendMessage(chatId, `Notification sent for transaction: ${tx.hash}`);
   } catch (error) {
-    console.error("Error sending Telegram message in mevbot:", error.message);
+    console.error("Error sending Telegram message:", error.message);
   }
+}
+
+// Helper function to split a string into chunks of a specified size
+function chunkString(str, size) {
+  const chunks = [];
+  for (let i = 0; i < str.length; i += size) {
+    chunks.push(str.slice(i, i + size));
+  }
+  return chunks;
 }
 
 function decodeLogs(logs) {
@@ -312,6 +317,28 @@ async function getTransactionData(txHash) {
   }
 }
 
+// Function to monitor MEV_BOT_ADDRESS for tracked token transactions
+async function monitorTrackedTokens(blockNumber) {
+  try {
+    const block = await provider.getBlock(blockNumber);
+    const transactions = await Promise.all(
+      block.transactions.map(txHash => provider.getTransaction(txHash))
+    );
+    for (const tx of transactions) {
+      if (tx && trackedTokens.has(tx.to)) {
+        console.log(`Tracked token transaction detected: ${tx.hash}`);
+        await bot.sendMessage(chatId, `Tracked token transaction detected: ${tx.hash}`);
+        const receipt = await provider.getTransactionReceipt(tx.hash);
+        const decodedLogs = decodeLogs(receipt.logs);
+        await sendTelegramMessage(tx, decodedLogs, "Tracked Token Transaction Detected");
+      }
+    }
+  } catch (error) {
+    await bot.sendMessage(chatId, `Error monitoring tracked tokens in block ${blockNumber}: ${error.message}`);
+    console.error(`Error monitoring tracked tokens in block ${blockNumber}:`, error.message);
+  }
+}
+
 // Function to start tracking MEV transactions
 async function startMEVTracking() {
   const fromAddress = process.env.MEV_TX_FROM;
@@ -320,7 +347,7 @@ async function startMEVTracking() {
   provider.on("block", async (blockNumber) => {
     if (processedBlocks.has(blockNumber)) {
       console.log(`Block ${blockNumber} has already been processed.`);
-      return; 
+      return;
     }
     processedBlocks.add(blockNumber);
 
@@ -331,65 +358,17 @@ async function startMEVTracking() {
         block.transactions.map(txHash => provider.getTransaction(txHash))
       );
       for (const tx of transactions) {
-        if (tx && typeof tx.from === "string" && tx.from.toLowerCase() === fromAddress.toLowerCase() &&
-            typeof tx.to === "string" && tx.to.toLowerCase() === toAddress.toLowerCase()) {
+        if (tx && tx.from.toLowerCase() === fromAddress.toLowerCase() && tx.to && tx.to.toLowerCase() === toAddress.toLowerCase()) {
           console.log(`MEV BOT transaction detected: ${tx.hash}`);
           await getTransactionData(tx.hash);
         }
       }
+      // Monitor tracked tokens for further transactions
+      await monitorTrackedTokens(blockNumber);
     } catch (error) {
       console.error(`Error processing block ${blockNumber}:`, error.message);
     }
   });
-
-  // Send summary every hour
-  setInterval(sendHourlySummary, 10 * 60 * 1000);
-}
-
-// Function to send hourly summary
-async function sendHourlySummary() {
-  try {
-    if (Object.keys(hourlyFirstTransactions).length === 0) {
-      await bot.sendMessage(chatId, "No first transactions to report.", { parse_mode: "HTML" });
-      console.log("No first transactions to report.");
-      return;
-    }
-
-    const filteredTransactions = Object.entries(hourlyFirstTransactions).filter(([tokenAddress, { buys, sells }]) => buys >= 10 || sells >= 10);
-
-    if (filteredTransactions.length === 0) {
-      await bot.sendMessage(chatId, "No transactions meeting the threshold to report.", { parse_mode: "HTML" });
-      console.log("No transactions meeting the threshold to report.");
-      return;
-    }
-
-    const summary = filteredTransactions.map(([tokenAddress, { buys, sells, name, symbol }]) => {
-      const etherscanLink = `https://etherscan.io/token/${tokenAddress}`;
-      return `<b><a href="${etherscanLink}">${name} (${symbol})</a>:</b> <code>${buys}</code> Buys, <code>${sells}</code> Sells`;
-    }).join("\n");
-
-    const message = `
-<b>📊 Hourly Summary of Significant Transactions 📊</b>
-
-Here are the tokens with at least 10 buys or 10 sells in the past hour:
-
-${summary}
-
-<i>Stay tuned for more updates!</i>
-`;
-    await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
-    console.log("Hourly summary sent.");
-
-    // Clear the hourly transactions
-    for (const key in hourlyFirstTransactions) {
-      if (hourlyFirstTransactions.hasOwnProperty(key)) {
-        delete hourlyFirstTransactions[key];
-      }
-    }
-  } catch (error) {
-    console.error("Error sending hourly summary:", error.message);
-    await bot.sendMessage(chatId, "Error sending hourly summary: " + error.message, { parse_mode: "HTML" });
-  }
 }
 
 module.exports = {
