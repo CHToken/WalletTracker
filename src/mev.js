@@ -1,12 +1,13 @@
+// mev.js
+
 const { ethers } = require("ethers");
 const dotenv = require("dotenv");
 const TelegramBot = require("node-telegram-bot-api");
-const { LocalStorage } = require('node-localstorage');
+const { MongoClient } = require("mongodb");
 dotenv.config();
 
 const processedBlocks = new Set();
 const firstTransactionCache = new Set(); // Cache to track first transactions
-const trackedTokens = new Set(); // Track tokens with the first transaction marked as "Yes"
 
 // Set up Infura provider
 const infuraUrl = process.env.MEV_INFURA_URL;
@@ -17,8 +18,28 @@ const botToken = process.env.TELEGRAM_MEVBOT_TOKEN;
 const chatId = process.env.TELEGRAM_MEVSWAP_CHANNEL_ID;
 const bot = new TelegramBot(botToken, { polling: false });
 
-// Set up local storage
-const localStorage = new LocalStorage('./localstorage');
+// MongoDB setup
+const mongoUrl = process.env.MONGODB_URL;
+const dbName = "blockchain";
+const collectionName = "TokenList";
+let db, collection;
+
+(async function connectToMongoDB() {
+  try {
+    const client = new MongoClient(mongoUrl);
+    await client.connect();
+    db = client.db(dbName);
+    const collections = await db.listCollections({ name: collectionName }).toArray();
+    if (collections.length === 0) {
+      await db.createCollection(collectionName);
+      console.log(`Collection ${collectionName} created`);
+    }
+    collection = db.collection(collectionName);
+    console.log("Connected to MongoDB ✅");
+  } catch (error) {
+    console.error("Error connecting to MongoDB:", error.message);
+  }
+})();
 
 // Define event signatures
 const uniswapV2EventSignature = ethers.id("Swap(address,uint256,uint256,uint256,uint256,address)");
@@ -155,114 +176,45 @@ async function getFormattedBlockDateTime(blockNumber) {
   }
 }
 
-async function sendTelegramMessage(tx, decodedLogs, title = "Transaction Detected ✅") {
+// New function to send notifications for user and token transactions
+async function sendUserTokenNotification(tx, log, tokenDetails0, tokenDetails1, transactionType) {
   try {
     const etherscanLink = `https://etherscan.io/tx/${tx.hash}`;
     const fromLink = `https://etherscan.io/address/${tx.from}`;
     const toLink = `https://etherscan.io/address/${tx.to}`;
 
-    // Get ENS name of tx.from address
     const ensName = await provider.lookupAddress(tx.from);
     const fromAddress = ensName ? `<a href="${fromLink}">${ensName}</a>` : `<a href="${fromLink}">${tx.from}</a>`;
-    const toAddress = `<a href="${toLink}">MEV BOT (${tx.to})</a>`;
+    const toAddress = `<a href="${toLink}">${tx.to}</a>`;
 
-    const logDetails = await Promise.all(decodedLogs.map(async log => {
-      let amountIn, amountOut, tokenIn, tokenOut, tokenInDetails, tokenOutDetails;
-      if (log.platform === "Uniswap V2") {
-        amountIn = log.log.args.amount1In;
-        amountOut = log.log.args.amount0Out;
-        const tokenAddresses = await getTokenAddresses(log.address);
-        tokenIn = tokenAddresses.token0;
-        tokenOut = tokenAddresses.token1;
-      } else if (log.platform === "Uniswap V3") {
-        amountIn = log.log.args.amount0;
-        amountOut = log.log.args.amount1;
-        const tokenAddresses = await getTokenAddresses(log.address);
-        tokenIn = tokenAddresses.token0;
-        tokenOut = tokenAddresses.token1;
-      }
-      tokenInDetails = await getTokenDetails(tokenIn);
-      tokenOutDetails = await getTokenDetails(tokenOut);
-      const amountInEth = weiToEth(amountIn);
-      const amountOutDecimal = amountToDecimal(amountOut, tokenInDetails.decimals, log.platform === "Uniswap V3");
-
-      // Skip if Amount In is 0 ETH or decimals is 0 or Amount Out is 0
-      if (amountInEth === 0 || tokenInDetails.decimals === 0 || amountOutDecimal === "0") {
-        return null;
-      }
-
-      // Check if it's the first transaction for the token by the tx.to address
-      const isFirstTransaction = await isFirstTransactionForToken(tokenIn, tx.to, tx.blockNumber);
-
-      // Skip if it's not the first transaction for the token by the tx.to address
-      if (!isFirstTransaction || firstTransactionCache.has(tokenIn)) {
-        return null;
-      }
-
-      // Add to the cache to avoid duplicate notifications and track the token
-      firstTransactionCache.add(tokenIn);
-      trackedTokens.add(tokenIn);
-
-      // // Store token details in local storage
-      // const tokenDetails = { name: tokenInDetails.name, symbol: tokenInDetails.symbol, decimals: tokenInDetails.decimals, address: tokenIn };
-      // localStorage.setItem(tokenIn, JSON.stringify(tokenDetails));
-
-      console.log(`First transaction detected for token: ${tokenIn}`);
-
-      let firstTransactionDateTime = "";
-      if (isFirstTransaction) {
-        firstTransactionDateTime = await getFormattedBlockDateTime(tx.blockNumber);
-      }
-
-      // Choose the appropriate symbol based on the platform
-      const name = log.platform === "Uniswap V2" ? tokenInDetails.name : tokenOutDetails.name;
-      const symbol = log.platform === "Uniswap V2" ? tokenInDetails.symbol : tokenOutDetails.symbol;
-      const decimals = log.platform === "Uniswap V2" ? tokenInDetails.decimals : tokenOutDetails.decimals;
-
-      const tokenDetails = { name: tokenInDetails.name, symbol: tokenInDetails.symbol, decimals: tokenInDetails.decimals, address: tokenIn };
-      localStorage.setItem(tokenIn, JSON.stringify(tokenDetails));
-
-      return `<b>Platform:</b> ${log.platform}\n<b>Token Bought ✅:</b> ${name} (${symbol}, ${decimals} decimals) (${tokenIn})\n<b>Amount In:</b> ${amountInEth} ETH\n<b>Amount Out:</b> ${amountOutDecimal} ${symbol}\n<b>First Transaction:</b> Yes\n<b>Time:</b> ${firstTransactionDateTime}\n`;
-    }));
-
-    const filteredLogDetails = logDetails.filter(detail => detail !== null);
-
-    if (filteredLogDetails.length === 0) {
-      console.log("No valid swap logs found with non-zero Amount In or valid decimals or no first transaction.");
-      return;
-    }
-
-    console.log("Sending Telegram message...");
+    const amount0In = ethers.formatUnits(log.args.amount0In, tokenDetails0.decimals);
+    const amount1In = ethers.formatUnits(log.args.amount1In, tokenDetails1.decimals);
+    const amount0Out = ethers.formatUnits(log.args.amount0Out, tokenDetails0.decimals);
+    const amount1Out = ethers.formatUnits(log.args.amount1Out, tokenDetails1.decimals);
 
     const message = `
-<b>${title}</b>
+<b>User Token Transaction Detected ✅</b>
 
-<b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>\n
+<b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>
 <b>Block Number:</b> ${tx.blockNumber}
 <b>From:</b> ${fromAddress}
-<b>To:</b> ${toAddress}\n
-<b>Logs:</b>\n${filteredLogDetails.join("\n\n")}
+<b>To:</b> ${toAddress}
+
+<b>Swap Details:</b>
+<b>Platform:</b> Uniswap V2
+<b>Transaction Type:</b> ${transactionType}
+<b>Token0:</b> ${tokenDetails0.name} (${tokenDetails0.symbol}, ${tokenDetails0.decimals} decimals)
+<b>Token1:</b> ${tokenDetails1.name} (${tokenDetails1.symbol}, ${tokenDetails1.decimals} decimals)
+<b>Amount0 In:</b> ${amount0In} ${tokenDetails0.symbol}
+<b>Amount1 In:</b> ${amount1In} ${tokenDetails1.symbol}
+<b>Amount0 Out:</b> ${amount0Out} ${tokenDetails0.symbol}
+<b>Amount1 Out:</b> ${amount1Out} ${tokenDetails1.symbol}
 `;
 
-    // Split the message into chunks if it exceeds Telegram's message limit
-    const messageChunks = chunkString(message, 4096);
-    for (const chunk of messageChunks) {
-      await bot.sendMessage(chatId, chunk, { parse_mode: "HTML" });
-    }
-
-    console.log(`First transaction notification sent for token: ${tokenIn}`);
+    await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
   } catch (error) {
-    console.error("Error sending Telegram message:", error.message);
+    console.error("Error sending user token notification:", error.message);
   }
-}
-
-// Helper function to split a string into chunks of a specified size
-function chunkString(str, size) {
-  const chunks = [];
-  for (let i = 0; i < str.length; i += size) {
-    chunks.push(str.slice(i, i + size));
-  }
-  return chunks;
 }
 
 function decodeLogs(logs) {
@@ -294,11 +246,38 @@ function decodeLogs(logs) {
         });
       }
     }
-    console.log("Logs decoded successfully.");
     return decodedLogs;
   } catch (error) {
     console.error("Error decoding logs:", error.message);
     return [];
+  }
+}
+
+async function checkUserTokenTransaction(tx, log) {
+  try {
+    const tokenAddresses = await getTokenAddresses(log.address);
+    const tokenDetails0 = await getTokenDetails(tokenAddresses.token0);
+    const tokenDetails1 = await getTokenDetails(tokenAddresses.token1);
+
+    const { amount0In, amount1In, amount0Out, amount1Out, to } = log.args;
+    let transactionType = "Unknown";
+
+    if (amount1In > 0 && amount0Out > 0) {
+      transactionType = "Buy ✅";
+    } else if (amount0In > 0 && amount1Out > 0) {
+      transactionType = "Sell ❌";
+    }
+
+    const trackedToken = await collection.findOne({ token: tokenAddresses.token0, user: to });
+
+    if (trackedToken) {
+      console.log(`Tracking transaction for user: ${to} and token: ${tokenAddresses.token0}`);
+      await sendUserTokenNotification(tx, log, tokenDetails0, tokenDetails1, transactionType);
+    } else {
+      console.log(`No tracking record found for user: ${to} and token: ${tokenAddresses.token0}`);
+    }
+  } catch (error) {
+    console.error("Error checking user token transaction:", error.message);
   }
 }
 
@@ -311,19 +290,110 @@ async function getTransactionData(txHash) {
       return;
     }
 
-    // Decode logs
     const decodedLogs = decodeLogs(receipt.logs);
 
     if (decodedLogs.length > 0) {
-      // Fetch the transaction details to include in the Telegram message
       const tx = await provider.getTransaction(txHash);
       if (!tx) {
         console.log("Transaction not found.");
         return;
       }
 
-      // Send Telegram message with transaction details and logs
-      await sendTelegramMessage(tx, decodedLogs);
+      for (const log of decodedLogs) {
+        if (log.platform === "Uniswap V2") {
+          await checkUserTokenTransaction(tx, log.log);
+        }
+      }
+
+      // Existing logic for sending Telegram message
+      const logDetails = await Promise.all(decodedLogs.map(async log => {
+        let amountIn, amountOut, tokenIn, tokenOut, tokenInDetails, tokenOutDetails;
+        if (log.platform === "Uniswap V2") {
+          amountIn = log.log.args.amount1In;
+          amountOut = log.log.args.amount0Out;
+          const tokenAddresses = await getTokenAddresses(log.address);
+          tokenIn = tokenAddresses.token0;
+          tokenOut = tokenAddresses.token1;
+        } else if (log.platform === "Uniswap V3") {
+          amountIn = log.log.args.amount0;
+          amountOut = log.log.args.amount1;
+          const tokenAddresses = await getTokenAddresses(log.address);
+          tokenIn = tokenAddresses.token0;
+          tokenOut = tokenAddresses.token1;
+        }
+        tokenInDetails = await getTokenDetails(tokenIn);
+        tokenOutDetails = await getTokenDetails(tokenOut);
+        const amountInEth = weiToEth(amountIn);
+        const amountOutDecimal = amountToDecimal(amountOut, tokenInDetails.decimals, log.platform === "Uniswap V3");
+
+        // Skip if Amount In is 0 ETH or decimals is 0 or Amount Out is 0
+        if (amountInEth === 0 || tokenInDetails.decimals === 0 || amountOutDecimal === "0") {
+          return null;
+        }
+
+        // Check if it's the first transaction for the token by the tx.to address
+        const isFirstTransaction = await isFirstTransactionForToken(tokenIn, tx.to, tx.blockNumber);
+
+        // Skip if it's not the first transaction for the token by the tx.to address
+        if (!isFirstTransaction || firstTransactionCache.has(tokenIn)) {
+          return null;
+        }
+
+        // Add to the cache to avoid duplicate notifications
+        firstTransactionCache.add(tokenIn);
+
+        console.log(`First transaction detected for token: ${tokenIn}`);
+
+        let firstTransactionDateTime = "";
+        if (isFirstTransaction) {
+          firstTransactionDateTime = await getFormattedBlockDateTime(tx.blockNumber);
+        }
+
+        // Store token details in MongoDB if it's the first transaction
+        if (isFirstTransaction) {
+          await collection.insertOne({
+            token: tokenIn,
+            user: tx.to,
+            blockNumber: tx.blockNumber,
+            dateTime: firstTransactionDateTime,
+            details: {
+              name: tokenInDetails.name,
+              symbol: tokenInDetails.symbol,
+              decimals: tokenInDetails.decimals,
+              amountInEth: amountInEth,
+              amountOut: amountOutDecimal
+            }
+          });
+          console.log(`Stored first transaction details for token: ${tokenIn} in MongoDB`);
+        }
+
+        // Choose the appropriate symbol based on the platform
+        const name = log.platform === "Uniswap V2" ? tokenInDetails.name : tokenOutDetails.name;
+        const symbol = log.platform === "Uniswap V2" ? tokenInDetails.symbol : tokenOutDetails.symbol;
+        const decimals = log.platform === "Uniswap V2" ? tokenInDetails.decimals : tokenOutDetails.decimals;
+
+        return `<b>Platform:</b> ${log.platform}\n<b>Token Bought ✅:</b> ${name} (${symbol}, ${decimals} decimals) (${tokenIn})\n<b>Amount In:</b> ${amountInEth} ETH\n<b>Amount Out:</b> ${amountOutDecimal} ${symbol}\n<b>First Transaction:</b> ${isFirstTransaction ? 'Yes' : 'No'}\n${isFirstTransaction ? `<b>Time:</b> ${firstTransactionDateTime}` : ''}\n`;
+      }));
+
+      const filteredLogDetails = logDetails.filter(detail => detail !== null);
+
+      if (filteredLogDetails.length === 0) {
+        console.log("No valid swap logs found with non-zero Amount In or valid decimals or no first transaction.");
+        return;
+      }
+
+      console.log("Sending Telegram message...");
+
+      const message = `
+<b>Transaction Detected ✅</b>
+
+<b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>\n
+<b>Block Number:</b> ${tx.blockNumber}
+<b>From:</b> ${fromAddress}
+<b>To:</b> ${toAddress}\n
+<b>Logs:</b>\n${filteredLogDetails.join("\n\n")}
+`;
+      await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
     } else {
       console.log("No Uniswap V2 or V3 swap logs found in this transaction.");
     }
@@ -332,27 +402,6 @@ async function getTransactionData(txHash) {
   }
 }
 
-// Function to monitor MEV_BOT_ADDRESS for tracked token transactions
-async function monitorTrackedTokens(blockNumber) {
-  try {
-    const block = await provider.getBlock(blockNumber);
-    const transactions = await Promise.all(
-      block.transactions.map(txHash => provider.getTransaction(txHash))
-    );
-    for (const tx of transactions) {
-      if (tx && trackedTokens.has(tx.to)) {
-        console.log(`Tracked token transaction detected: ${tx.hash}`);
-        const receipt = await provider.getTransactionReceipt(tx.hash);
-        const decodedLogs = decodeLogs(receipt.logs);
-        await sendTelegramMessage(tx, decodedLogs, "Tracked Token Transaction Detected");
-      }
-    }
-  } catch (error) {
-    console.error(`Error monitoring tracked tokens in block ${blockNumber}:`, error.message);
-  }
-}
-
-// Function to start tracking MEV transactions
 async function startMEVTracking() {
   const fromAddress = process.env.MEV_TX_FROM;
   const toAddress = process.env.MEV_BOT_ADDRESS;
@@ -376,8 +425,6 @@ async function startMEVTracking() {
           await getTransactionData(tx.hash);
         }
       }
-      // Monitor tracked tokens for further transactions
-      await monitorTrackedTokens(blockNumber);
     } catch (error) {
       console.error(`Error processing block ${blockNumber}:`, error.message);
     }
