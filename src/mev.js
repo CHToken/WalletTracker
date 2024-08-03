@@ -1,5 +1,3 @@
-// mev.js
-
 const { ethers } = require("ethers");
 const dotenv = require("dotenv");
 const TelegramBot = require("node-telegram-bot-api");
@@ -207,65 +205,65 @@ async function sendTelegramMessage(tx, decodedLogs) {
       const amountInEth = weiToEth(amountIn);
       const amountOutDecimal = amountToDecimal(amountOut, tokenInDetails.decimals, log.platform === "Uniswap V3");
 
-        // Skip if Amount In is 0 ETH or decimals is 0 or Amount Out is 0
-        if (amountInEth === 0 || tokenInDetails.decimals === 0 || amountOutDecimal === "0") {
-          return null;
-        }
+      // Skip if Amount In is 0 ETH or decimals is 0 or Amount Out is 0
+      if (amountInEth === 0 || tokenInDetails.decimals === 0 || amountOutDecimal === "0") {
+        return null;
+      }
 
-        // Check if it's the first transaction for the token by the tx.to address
-        const isFirstTransaction = await isFirstTransactionForToken(tokenIn, tx.to, tx.blockNumber);
+      // Check if it's the first transaction for the token by the tx.to address
+      const isFirstTransaction = await isFirstTransactionForToken(tokenIn, tx.to, tx.blockNumber);
 
-        // Skip if it's not the first transaction for the token by the tx.to address
-        if (!isFirstTransaction || firstTransactionCache.has(tokenIn)) {
-          return null;
-        }
+      // Skip if it's not the first transaction for the token by the tx.to address
+      if (!isFirstTransaction || firstTransactionCache.has(tokenIn)) {
+        return null;
+      }
 
       // Add to the cache to avoid duplicate notifications
       firstTransactionCache.add(tokenIn);
 
-        console.log(`First transaction detected for token: ${tokenIn}`);
+      console.log(`First transaction detected for token: ${tokenIn}`);
 
-        let firstTransactionDateTime = "";
-        if (isFirstTransaction) {
-          firstTransactionDateTime = await getFormattedBlockDateTime(tx.blockNumber);
-        }
-
-        // Store token details in MongoDB if it's the first transaction
-        if (isFirstTransaction) {
-          await collection.insertOne({
-            token: tokenIn,
-            user: tx.to,
-            blockNumber: tx.blockNumber,
-            dateTime: firstTransactionDateTime,
-            details: {
-              name: tokenInDetails.name,
-              symbol: tokenInDetails.symbol,
-              decimals: tokenInDetails.decimals,
-              amountInEth: amountInEth,
-              amountOut: amountOutDecimal
-            }
-          });
-          console.log(`Stored first transaction details for token: ${tokenIn} in MongoDB`);
-        }
-
-        // Choose the appropriate symbol based on the platform
-        const name = log.platform === "Uniswap V2" ? tokenInDetails.name : tokenOutDetails.name;
-        const symbol = log.platform === "Uniswap V2" ? tokenInDetails.symbol : tokenOutDetails.symbol;
-        const decimals = log.platform === "Uniswap V2" ? tokenInDetails.decimals : tokenOutDetails.decimals;
-
-        return `<b>Platform:</b> ${log.platform}\n<b>Token Bought ✅:</b> ${name} (${symbol}, ${decimals} decimals) (${tokenIn})\n<b>Amount In:</b> ${amountInEth} ETH\n<b>Amount Out:</b> ${amountOutDecimal} ${symbol}\n<b>First Transaction:</b> ${isFirstTransaction ? 'Yes' : 'No'}\n${isFirstTransaction ? `<b>Time:</b> ${firstTransactionDateTime}` : ''}\n`;
-      }));
-
-      const filteredLogDetails = logDetails.filter(detail => detail !== null);
-
-      if (filteredLogDetails.length === 0) {
-        console.log("No valid swap logs found with non-zero Amount In or valid decimals or no first transaction.");
-        return;
+      let firstTransactionDateTime = "";
+      if (isFirstTransaction) {
+        firstTransactionDateTime = await getFormattedBlockDateTime(tx.blockNumber);
       }
 
-      console.log("Sending Telegram message...");
+      // Store token details in MongoDB if it's the first transaction
+      if (isFirstTransaction) {
+        await collection.insertOne({
+          token: tokenIn,
+          user: tx.to,
+          blockNumber: tx.blockNumber,
+          dateTime: firstTransactionDateTime,
+          details: {
+            name: tokenInDetails.name,
+            symbol: tokenInDetails.symbol,
+            decimals: tokenInDetails.decimals,
+            amountInEth: amountInEth,
+            amountOut: amountOutDecimal
+          }
+        });
+        console.log(`Stored first transaction details for token: ${tokenIn} in MongoDB`);
+      }
 
-      const message = `
+      // Choose the appropriate symbol based on the platform
+      const name = log.platform === "Uniswap V2" ? tokenInDetails.name : tokenOutDetails.name;
+      const symbol = log.platform === "Uniswap V2" ? tokenInDetails.symbol : tokenOutDetails.symbol;
+      const decimals = log.platform === "Uniswap V2" ? tokenInDetails.decimals : tokenOutDetails.decimals;
+
+      return `<b>Platform:</b> ${log.platform}\n<b>Token Bought ✅:</b> ${name} (${symbol}, ${decimals} decimals) (${tokenIn})\n<b>Amount In:</b> ${amountInEth} ETH\n<b>Amount Out:</b> ${amountOutDecimal} ${symbol}\n<b>First Transaction:</b> ${isFirstTransaction ? 'Yes' : 'No'}\n${isFirstTransaction ? `<b>Time:</b> ${firstTransactionDateTime}` : ''}\n`;
+    }));
+
+    const filteredLogDetails = logDetails.filter(detail => detail !== null);
+
+    if (filteredLogDetails.length === 0) {
+      console.log("No valid swap logs found with non-zero Amount In or valid decimals or no first transaction.");
+      return;
+    }
+
+    console.log("Sending Telegram message...");
+
+    const message = `
 <b>Transaction Detected ✅</b>
 
 <b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>\n
@@ -275,9 +273,9 @@ async function sendTelegramMessage(tx, decodedLogs) {
 <b>Logs:</b>\n${filteredLogDetails.join("\n\n")}
 `;
     await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
-    console.log(`First transaction notification sent for token: ${tokenIn}`);
+    console.log("First transaction notification sent.");
   } catch (error) {
-    console.error("Error sending Telegram message:", error.message);
+    console.error("Error sending Telegram message in mevbot:", error.message);
   }
 }
 
