@@ -3,7 +3,7 @@ const { MongoClient } = require('mongodb');
 const { startTrackingDeposits } = require('./src/track');
 const { SwapTrack } = require('./src/swapTrack');
 const { startMEVTracking } = require('./src/mev');
-const { startUserTokenTracking } = require('./src/usage');
+// const { startUserTokenTracking } = require('./src/usage');
 const moment = require("moment");
 const TelegramBot = require("node-telegram-bot-api");
 
@@ -100,7 +100,7 @@ bot.on('message', async (msg) => {
     await startTrackingDeposits(db);
     await SwapTrack(db);
     await startMEVTracking();
-    await startUserTokenTracking();
+    // await startUserTokenTracking();
   } catch (error) {
     console.error("Failed to start tracking:", error);
   }
