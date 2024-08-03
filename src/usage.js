@@ -28,7 +28,7 @@ let db, collection;
     console.log("Connected to MongoDB ✅");
 
     await cleanUpOldTokens();
-    setInterval(cleanUpOldTokens, 10 * 60 * 1000); // Schedule cleanup every 10 minutes
+    setInterval(cleanUpOldTokens, 30 * 60 * 1000); // Schedule cleanup every 30 minutes
   } catch (error) {
     await handleError("Error connecting to MongoDB:", error);
   }
@@ -36,12 +36,12 @@ let db, collection;
 
 // Clean up old tokens older than 10 minutes
 async function cleanUpOldTokens() {
-  const tenMinutesAgo = moment().subtract(10, 'minutes').toDate(); // 10 minutes ago
+  const tenMinutesAgo = moment().subtract(60, 'minutes').toDate(); // 60 minutes ago
   try {
     const result = await collection.deleteMany({
       dateTime: { $lt: moment(tenMinutesAgo).format("M/D/YYYY h:mm:ss A") }
     });
-    console.log(`Deleted ${result.deletedCount} tokens older than 10 minutes.`);
+    console.log(`Deleted ${result.deletedCount} tokens older than 60 minutes.`);
   } catch (error) {
     await handleError("Error cleaning up old tokens:", error);
   }
