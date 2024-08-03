@@ -176,155 +176,36 @@ async function getFormattedBlockDateTime(blockNumber) {
   }
 }
 
-// New function to send notifications for user and token transactions
-async function sendUserTokenNotification(tx, log, tokenDetails0, tokenDetails1, transactionType) {
+async function sendTelegramMessage(tx, decodedLogs) {
   try {
     const etherscanLink = `https://etherscan.io/tx/${tx.hash}`;
     const fromLink = `https://etherscan.io/address/${tx.from}`;
     const toLink = `https://etherscan.io/address/${tx.to}`;
 
+    // Get ENS name of tx.from address
     const ensName = await provider.lookupAddress(tx.from);
     const fromAddress = ensName ? `<a href="${fromLink}">${ensName}</a>` : `<a href="${fromLink}">${tx.from}</a>`;
-    const toAddress = `<a href="${toLink}">${tx.to}</a>`;
+    const toAddress = `<a href="${toLink}">MEV BOT (${tx.to})</a>`;
 
-    const amount0In = ethers.formatUnits(log.args.amount0In, tokenDetails0.decimals);
-    const amount1In = ethers.formatUnits(log.args.amount1In, tokenDetails1.decimals);
-    const amount0Out = ethers.formatUnits(log.args.amount0Out, tokenDetails0.decimals);
-    const amount1Out = ethers.formatUnits(log.args.amount1Out, tokenDetails1.decimals);
-
-    const message = `
-<b>User Token Transaction Detected ✅</b>
-
-<b>Transaction Hash:</b> <a href="${etherscanLink}">${tx.hash}</a>
-<b>Block Number:</b> ${tx.blockNumber}
-<b>From:</b> ${fromAddress}
-<b>To:</b> ${toAddress}
-
-<b>Swap Details:</b>
-<b>Platform:</b> Uniswap V2
-<b>Transaction Type:</b> ${transactionType}
-<b>Token0:</b> ${tokenDetails0.name} (${tokenDetails0.symbol}, ${tokenDetails0.decimals} decimals)
-<b>Token1:</b> ${tokenDetails1.name} (${tokenDetails1.symbol}, ${tokenDetails1.decimals} decimals)
-<b>Amount0 In:</b> ${amount0In} ${tokenDetails0.symbol}
-<b>Amount1 In:</b> ${amount1In} ${tokenDetails1.symbol}
-<b>Amount0 Out:</b> ${amount0Out} ${tokenDetails0.symbol}
-<b>Amount1 Out:</b> ${amount1Out} ${tokenDetails1.symbol}
-`;
-
-    await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
-  } catch (error) {
-    console.error("Error sending user token notification:", error.message);
-  }
-}
-
-function decodeLogs(logs) {
-  try {
-    const ifaceV2 = new ethers.Interface([
-      "event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to)"
-    ]);
-
-    const ifaceV3 = new ethers.Interface([
-      "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)"
-    ]);
-
-    const decodedLogs = [];
-
-    for (const log of logs) {
-      if (log.topics[0] === uniswapV2EventSignature) {
-        const decodedLog = ifaceV2.parseLog(log);
-        decodedLogs.push({
-          platform: "Uniswap V2",
-          log: decodedLog,
-          address: log.address // pair address
-        });
-      } else if (log.topics[0] === uniswapV3EventSignature) {
-        const decodedLog = ifaceV3.parseLog(log);
-        decodedLogs.push({
-          platform: "Uniswap V3",
-          log: decodedLog,
-          address: log.address // pair address
-        });
+    const logDetails = await Promise.all(decodedLogs.map(async log => {
+      let amountIn, amountOut, tokenIn, tokenOut, tokenInDetails, tokenOutDetails;
+      if (log.platform === "Uniswap V2") {
+        amountIn = log.log.args.amount1In;
+        amountOut = log.log.args.amount0Out;
+        const tokenAddresses = await getTokenAddresses(log.address);
+        tokenIn = tokenAddresses.token0;
+        tokenOut = tokenAddresses.token1;
+      } else if (log.platform === "Uniswap V3") {
+        amountIn = log.log.args.amount0;
+        amountOut = log.log.args.amount1;
+        const tokenAddresses = await getTokenAddresses(log.address);
+        tokenIn = tokenAddresses.token0;
+        tokenOut = tokenAddresses.token1;
       }
-    }
-    return decodedLogs;
-  } catch (error) {
-    console.error("Error decoding logs:", error.message);
-    return [];
-  }
-}
-
-async function checkUserTokenTransaction(tx, log) {
-  try {
-    const tokenAddresses = await getTokenAddresses(log.address);
-    const tokenDetails0 = await getTokenDetails(tokenAddresses.token0);
-    const tokenDetails1 = await getTokenDetails(tokenAddresses.token1);
-
-    const { amount0In, amount1In, amount0Out, amount1Out, to } = log.args;
-    let transactionType = "Unknown";
-
-    if (amount1In > 0 && amount0Out > 0) {
-      transactionType = "Buy ✅";
-    } else if (amount0In > 0 && amount1Out > 0) {
-      transactionType = "Sell ❌";
-    }
-
-    const trackedToken = await collection.findOne({ token: tokenAddresses.token0, user: to });
-
-    if (trackedToken) {
-      console.log(`Tracking transaction for user: ${to} and token: ${tokenAddresses.token0}`);
-      await sendUserTokenNotification(tx, log, tokenDetails0, tokenDetails1, transactionType);
-    } else {
-      console.log(`No tracking record found for user: ${to} and token: ${tokenAddresses.token0}`);
-    }
-  } catch (error) {
-    console.error("Error checking user token transaction:", error.message);
-  }
-}
-
-async function getTransactionData(txHash) {
-  try {
-    const receipt = await provider.getTransactionReceipt(txHash);
-
-    if (!receipt) {
-      console.log("Transaction receipt not found.");
-      return;
-    }
-
-    const decodedLogs = decodeLogs(receipt.logs);
-
-    if (decodedLogs.length > 0) {
-      const tx = await provider.getTransaction(txHash);
-      if (!tx) {
-        console.log("Transaction not found.");
-        return;
-      }
-
-      for (const log of decodedLogs) {
-        if (log.platform === "Uniswap V2") {
-          await checkUserTokenTransaction(tx, log.log);
-        }
-      }
-
-      // Existing logic for sending Telegram message
-      const logDetails = await Promise.all(decodedLogs.map(async log => {
-        let amountIn, amountOut, tokenIn, tokenOut, tokenInDetails, tokenOutDetails;
-        if (log.platform === "Uniswap V2") {
-          amountIn = log.log.args.amount1In;
-          amountOut = log.log.args.amount0Out;
-          const tokenAddresses = await getTokenAddresses(log.address);
-          tokenIn = tokenAddresses.token0;
-          tokenOut = tokenAddresses.token1;
-        } else if (log.platform === "Uniswap V3") {
-          amountIn = log.log.args.amount0;
-          amountOut = log.log.args.amount1;
-          const tokenAddresses = await getTokenAddresses(log.address);
-          tokenIn = tokenAddresses.token0;
-          tokenOut = tokenAddresses.token1;
-        }
-        tokenInDetails = await getTokenDetails(tokenIn);
-        tokenOutDetails = await getTokenDetails(tokenOut);
-        const amountInEth = weiToEth(amountIn);
-        const amountOutDecimal = amountToDecimal(amountOut, tokenInDetails.decimals, log.platform === "Uniswap V3");
+      tokenInDetails = await getTokenDetails(tokenIn);
+      tokenOutDetails = await getTokenDetails(tokenOut);
+      const amountInEth = weiToEth(amountIn);
+      const amountOutDecimal = amountToDecimal(amountOut, tokenInDetails.decimals, log.platform === "Uniswap V3");
 
         // Skip if Amount In is 0 ETH or decimals is 0 or Amount Out is 0
         if (amountInEth === 0 || tokenInDetails.decimals === 0 || amountOutDecimal === "0") {
@@ -339,8 +220,8 @@ async function getTransactionData(txHash) {
           return null;
         }
 
-        // Add to the cache to avoid duplicate notifications
-        firstTransactionCache.add(tokenIn);
+      // Add to the cache to avoid duplicate notifications
+      firstTransactionCache.add(tokenIn);
 
         console.log(`First transaction detected for token: ${tokenIn}`);
 
@@ -393,7 +274,72 @@ async function getTransactionData(txHash) {
 <b>To:</b> ${toAddress}\n
 <b>Logs:</b>\n${filteredLogDetails.join("\n\n")}
 `;
-      await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+    await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+    console.log(`First transaction notification sent for token: ${tokenIn}`);
+  } catch (error) {
+    console.error("Error sending Telegram message:", error.message);
+  }
+}
+
+function decodeLogs(logs) {
+  try {
+    const ifaceV2 = new ethers.Interface([
+      "event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to)"
+    ]);
+
+    const ifaceV3 = new ethers.Interface([
+      "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)"
+    ]);
+
+    const decodedLogs = [];
+
+    for (const log of logs) {
+      if (log.topics[0] === uniswapV2EventSignature) {
+        const decodedLog = ifaceV2.parseLog(log);
+        decodedLogs.push({
+          platform: "Uniswap V2",
+          log: decodedLog,
+          address: log.address // pair address
+        });
+      } else if (log.topics[0] === uniswapV3EventSignature) {
+        const decodedLog = ifaceV3.parseLog(log);
+        decodedLogs.push({
+          platform: "Uniswap V3",
+          log: decodedLog,
+          address: log.address // pair address
+        });
+      }
+    }
+    console.log("Logs decoded successfully.");
+    return decodedLogs;
+  } catch (error) {
+    console.error("Error decoding logs:", error.message);
+    return [];
+  }
+}
+
+async function getTransactionData(txHash) {
+  try {
+    const receipt = await provider.getTransactionReceipt(txHash);
+
+    if (!receipt) {
+      console.log("Transaction receipt not found.");
+      return;
+    }
+
+    // Decode logs
+    const decodedLogs = decodeLogs(receipt.logs);
+
+    if (decodedLogs.length > 0) {
+      // Fetch the transaction details to include in the Telegram message
+      const tx = await provider.getTransaction(txHash);
+      if (!tx) {
+        console.log("Transaction not found.");
+        return;
+      }
+
+      // Send Telegram message with transaction details and logs
+      await sendTelegramMessage(tx, decodedLogs);
     } else {
       console.log("No Uniswap V2 or V3 swap logs found in this transaction.");
     }
@@ -402,6 +348,7 @@ async function getTransactionData(txHash) {
   }
 }
 
+// Function to start tracking MEV transactions
 async function startMEVTracking() {
   const fromAddress = process.env.MEV_TX_FROM;
   const toAddress = process.env.MEV_BOT_ADDRESS;
