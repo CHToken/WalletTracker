@@ -364,6 +364,7 @@ async function startMEVTracking() {
       const transactions = await Promise.all(
         block.transactions.map(txHash => provider.getTransaction(txHash))
       );
+      console.log(`Processing block: ${blockNumber}, Transactions: ${block.transactions.length}`);
       for (const tx of transactions) {
         if (tx && tx.from.toLowerCase() === fromAddress.toLowerCase() && tx.to && tx.to.toLowerCase() === toAddress.toLowerCase()) {
           console.log(`MEV BOT transaction detected: ${tx.hash}`);
