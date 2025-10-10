@@ -4,7 +4,7 @@ import TelegramBot from "node-telegram-bot-api";
 import { MongoClient, Db, Collection } from "mongodb";
 import fs from "fs";
 import path from "path";
-import PQueue from "p-queue";
+import { default as PQueue } from "p-queue";
 
 dotenv.config();
 
