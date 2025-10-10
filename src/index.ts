@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import { MongoClient, Db } from "mongodb";
 import moment from "moment";
 import TelegramBot from "node-telegram-bot-api";
-import { Track as startTrackingDeposits } from "./src/track";
+import { Track as startTrackingDeposits } from "./track";
 
 dotenv.config();
 
