@@ -4,6 +4,7 @@ import TelegramBot from "node-telegram-bot-api";
 import { MongoClient, Db, Collection } from "mongodb";
 import fs from "fs";
 import path from "path";
+import PQueue from "p-queue";
 
 dotenv.config();
 
@@ -260,9 +261,6 @@ const templates = {
 
 // 🧠 Main Tracker
 export async function Track(): Promise<void> {
-  // Dynamic import for p-queue to avoid ESM require issue in CJS build
-  const { default: PQueue } = await import("p-queue");
-
   // 🧩 Telegram Queue
   const telegramQueue = new PQueue({ interval: 2000, intervalCap: 1, carryoverConcurrencyCount: true });
 
