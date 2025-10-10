@@ -1,10 +1,10 @@
 {
   "compilerOptions": {
     "target": "es2020",  
-    "module": "nodenext",  
+    "module": "commonjs",  
     "outDir": "./dist", 
     "resolveJsonModule": true,
-    "moduleResolution": "nodenext",
+    "moduleResolution": "node",
     "types": ["node"],
     "esModuleInterop": true, 
     "forceConsistentCasingInFileNames": true, 
@@ -24,10 +24,10 @@
     "paths": {
       "*": ["node_modules/*"]
     },
+    "typeRoots": ["./node_modules/@types", "./src/types"]
   },
   "include": [
-    "src/**/*.ts",
-    "src/**/*.json"
+    "src/**/*.ts", "src/types/**/*.ts", "src/**/*.json"
   ],
   "exclude": [
     "node_modules"

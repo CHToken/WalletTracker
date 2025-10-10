@@ -2,13 +2,11 @@
   "name": "wallettracker",
   "version": "1.0.0",
   "description": "Track Ethereum wallet transactions and notify via Telegram",
-  "main": "dist/index.js",
-  "type": "module",
+  "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "dev": "ts-node src/index.ts",
-    "clean": "npx rimraf dist",
-    "build": "tsc && npx cpx \"src/**/*.json\" dist",
-    "build:dev": "npm run clean && tsc && npx cpx \"src/**/*.json\" dist",
+    "build": "tsc",
     "start": "node dist/index.js"
   },
   "keywords": [
