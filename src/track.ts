@@ -1,3 +1,4 @@
+import PQueue from "p-queue";
 import dotenv from "dotenv";
 import { ethers, FetchRequest } from "ethers";
 import TelegramBot from "node-telegram-bot-api";
@@ -190,8 +191,11 @@ async function initMongo(): Promise<void> {
 const shortenAddress = (a: string) => `${a.slice(0, 6)}...${a.slice(-4)}`;
 const weiToEth = (w: bigint) => Number(ethers.formatEther(w));
 
+// 🧩 Telegram Queue
+const telegramQueue = new PQueue({ interval: 2000, intervalCap: 1, carryoverConcurrencyCount: true });
+
 // 🧩 Telegram Message Sender (with retry & HTML)
-async function sendTelegramNotification(message: string, confirmed = false, telegramQueue: any): Promise<void> {
+async function sendTelegramNotification(message: string, confirmed = false): Promise<void> {
   if (!bot) return;
   const chatId = confirmed ? TELEGRAM_CONFIRMED_DEPOSIT_CHANNEL_ID : TELEGRAM_DEPOSIT_CHANNEL_ID;
   if (!chatId) return;
@@ -260,12 +264,6 @@ const templates = {
 
 // 🧠 Main Tracker
 export async function Track(): Promise<void> {
-  // Dynamic import for p-queue to avoid ESM require issue in CJS build
-  const { default: PQueue } = await import("p-queue");
-
-  // 🧩 Telegram Queue
-  const telegramQueue = new PQueue({ interval: 2000, intervalCap: 1, carryoverConcurrencyCount: true });
-
   await initMongo();
 
   const exchangeWallets = config.exchangeWallets?.map((w: any) => w.address.toLowerCase()) ?? [];
@@ -293,7 +291,7 @@ export async function Track(): Promise<void> {
       const exists = await pendingTxCollection?.findOne({ hash: tx.hash });
       if (exists) await pendingTxCollection?.deleteOne({ hash: tx.hash });
 
-      await sendTelegramNotification(msg, true, telegramQueue);
+      await sendTelegramNotification(msg, true);
       await storeTransaction({ from, to, amount, hash: tx.hash, timestamp: new Date(), confirmed: true });
       console.log(`✅ Confirmed ${amount} ETH from ${from} → ${to}`);
     }
@@ -322,7 +320,7 @@ export async function Track(): Promise<void> {
     const tag = getTagForAddress(from);
     const msg = templates.pending(shortenAddress(from), shortenAddress(to), amount, tag, `https://etherscan.io/tx/${tx.hash}`);
 
-    await sendTelegramNotification(msg, false, telegramQueue);
+    await sendTelegramNotification(msg);
     await storeTransaction({ from, to, amount, hash: tx.hash, timestamp: new Date(), confirmed: false }, true);
     console.log(`⚡ Pending ${amount} ETH from ${from} → ${to}`);
   });
@@ -376,7 +374,7 @@ export async function Track(): Promise<void> {
         `https://etherscan.io/tx/${tx.hash}`
       );
 
-      await sendTelegramNotification(msg, true, telegramQueue);
+      await sendTelegramNotification(msg, true);
       await transferTxCollection?.updateOne(
         { hash: tx.hash },
         { $set: { ...tx, confirmed: true } },

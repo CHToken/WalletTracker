@@ -1,35 +1,26 @@
 {
   "compilerOptions": {
-    "target": "es2020",  
-    "module": "commonjs",  
-    "outDir": "./dist", 
+    "target": "es2020",
+    "module": "es2020",
+    "outDir": "./dist",
     "resolveJsonModule": true,
     "moduleResolution": "node",
     "types": ["node"],
-    "esModuleInterop": true, 
-    "forceConsistentCasingInFileNames": true, 
-    "skipLibCheck": true, 
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
     "removeComments": true,
-    "strict": true, 
-    "noUnusedLocals": true, 
+    "strict": true,
+    "noUnusedLocals": true,
     "noImplicitAny": true,
-    
-    /* Emit Options */
-    "sourceMap": false,  // Consider turning on source maps if debugging the compiled JS
-    "declaration": true, // Generates .d.ts files
-    "declarationMap": true,  // Create a map for declaration files
-
-    /* Path Resolutions */
-    "baseUrl": ".",  
+    "sourceMap": false,
+    "declaration": true,
+    "declarationMap": true,
+    "baseUrl": ".",
     "paths": {
       "*": ["node_modules/*"]
-    },
+    }
   },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.json"
-  ],
-  "exclude": [
-    "node_modules"
-  ]
+  "include": ["src/**/*.ts", "src/**/*.json"],
+  "exclude": ["node_modules"]
 }
