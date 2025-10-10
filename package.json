@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "ts-node src/index.ts",
     "clean": "npx rimraf dist",
-    "build": "npm run clean && tsc && npx cpx \"src/**/*.json\" dist",
+    "build": "tsc && npx cpx \"src/**/*.json\" dist",
+    "build:dev": "npm run clean && tsc && npx cpx \"src/**/*.json\" dist",
     "start": "node dist/index.js"
   },
   "keywords": [
