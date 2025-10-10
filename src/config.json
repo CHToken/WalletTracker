@@ -1,6 +1,10 @@
 {
   "exchangeWallets": [
     {
+      "address": "0xE7351Fd770A37282b91D153Ee690B63579D6dd7f",
+      "tag": "BSC: Hot Wallet"
+    },
+    {
       "address": "0xDB044B8298E04D442FdBE5ce01B8cc8F77130e33",
       "tag": "Bitkub: Hot Wallet 1"
     },

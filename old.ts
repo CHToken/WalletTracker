@@ -1,22 +1,27 @@
-const { MongoClient } = require("mongodb");
-const dotenv = require("dotenv");
-const moment = require("moment");
+// src/old.ts
+import { MongoClient } from "mongodb";
+import dotenv from "dotenv";
+import moment from "moment";
 
 dotenv.config();
 
-const mongoUri = process.env.MONGODB_URL;
+const mongoUri = process.env.MONGODB_URL as string;
 const client = new MongoClient(mongoUri);
 
-async function removeOldAddresses() {
+interface DepositAddress {
+  timestamp: Date;
+  [key: string]: any;
+}
+
+export async function removeOldAddresses(): Promise<DepositAddress[] | void> {
   try {
     await client.connect();
     const database = client.db("blockchain");
-    const collection = database.collection("DepositAddresses");
+    const collection = database.collection<DepositAddress>("DepositAddresses");
 
-    const cutoffTime = moment().subtract(12, 'hours').toDate();
-
+    const cutoffTime = moment().subtract(12, "hours").toDate();
     const query = { timestamp: { $lt: cutoffTime } };
-    
+
     const oldAddresses = await collection.find(query).toArray();
 
     console.log("Number of addresses older than 12 hours:", oldAddresses.length);

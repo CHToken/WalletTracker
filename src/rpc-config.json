@@ -1,0 +1,14 @@
+{
+  "rpcs": [
+    {
+      "name": "alchemyeth",
+      "http": "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}",
+      "ws": "wss://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+    },
+    {
+      "name": "chainstacketh",
+      "http": "https://ethereum-mainnet.core.chainstack.com/${CHAINSTACK_API_KEY}",
+      "ws": "wss://ethereum-mainnet.core.chainstack.com/ws/${CHAINSTACK_API_KEY}"
+    }
+  ]
+}
