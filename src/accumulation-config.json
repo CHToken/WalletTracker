@@ -1,0 +1,14 @@
+{
+    "thresholds": {
+        "minBuyCount": 5,
+        "minCumulativeUSD": 10000,
+        "minBuySpacingMinutes": 10,
+        "maxBuysPerHour": 3,
+        "noSellHours": 72,
+        "minBalanceRetentionPercent": 90,
+        "maxUniqueTokensTraded": 20,
+        "maxTxPerDay": 50,
+        "evaluationWindowHours": 72,
+        "scanIntervalMinutes": 5
+    }
+}

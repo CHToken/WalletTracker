@@ -1,136 +1,170 @@
 // src/index.ts
 import dotenv from "dotenv";
-import { MongoClient, Db } from "mongodb";
-import moment from "moment";
-import TelegramBot from "node-telegram-bot-api";
-import { Track as startTrackingDeposits } from "./track";
-
 dotenv.config();
 
-// --- ENV SETUP ---
-const botToken = process.env.TELEGRAM_BOT_TOKEN as string;
-const chatId = process.env.TELEGRAM_CHAT_ID as string;
-const mongoUri = process.env.MONGODB_URL as string;
+import { getProvider, initMongo, getTelegramBot } from "./providers";
+import { scanTokenForAccumulators } from "./detector";
+import { discoverActiveTokens, watchNewPairs } from "./discovery";
+import { discoverSolanaTokens } from "./solana-api";
+import { CONFIG, ChainId, CHAINS, ENV } from "./appConfig";
+import { DiscoveredToken } from "./types";
 
-if (!botToken || !chatId) {
-  console.warn("⚠️ Missing Telegram credentials in environment variables.");
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-if (!mongoUri) {
-  console.error("❌ Missing MONGODB_URL in environment variables.");
-  process.exit(1);
+// Token queue for analysis
+interface QueuedToken {
+  address: string;
+  chain: ChainId;
 }
 
-const bot = new TelegramBot(botToken, { polling: true });
-let client: MongoClient | null = null;
+const tokenQueue: QueuedToken[] = [];
+const analyzedTokens = new Set<string>();
 
-// --- Ensure MongoDB Connection ---
-async function ensureConnection(): Promise<Db> {
-  if (!client) {
-    client = new MongoClient(mongoUri);
-    await client.connect();
-    console.log("✅ Connected to MongoDB");
-  } else {
+function getTokenKey(address: string, chain: ChainId): string {
+  return `${chain}_${address.toLowerCase()}`;
+}
+
+async function processQueue(): Promise<void> {
+  while (tokenQueue.length > 0) {
+    const token = tokenQueue.shift()!;
+    const key = getTokenKey(token.address, token.chain);
+
+    if (analyzedTokens.has(key)) continue;
+
     try {
-      await client.db("admin").command({ ping: 1 });
-    } catch {
-      console.log("🔄 Reconnecting MongoDB...");
-      client = new MongoClient(mongoUri);
-      await client.connect();
-      console.log("✅ Reconnected to MongoDB");
+      console.log(`\n📊 [${CHAINS[token.chain].name}] Analyzing: ${token.address}`);
+      await scanTokenForAccumulators(token.address, token.chain);
+      analyzedTokens.add(key);
+    } catch (err: any) {
+      console.error(`Error analyzing ${token.address}:`, err?.message);
+    }
+
+    await sleep(5000); // Rate limit
+  }
+}
+
+async function main(): Promise<void> {
+  console.log("🚀 Wallet Accumulation Tracker");
+  console.log("═".repeat(50));
+  console.log(`   Mode: Auto-Discovery (ETH + BSC + SOL)`);
+  console.log(`   Evaluation window: ${CONFIG.EVALUATION_WINDOW_HOURS}h`);
+  console.log(`   Min buys: ${CONFIG.MIN_BUY_COUNT}`);
+  console.log(`   Min USD: $${CONFIG.MIN_CUMULATIVE_USD}`);
+  console.log(`   Scan interval: ${CONFIG.SCAN_INTERVAL_MS / 60000} min`);
+  console.log("");
+
+  // Initialize
+  await initMongo();
+  getTelegramBot();
+
+  const evmChains: ChainId[] = ["eth", "bsc"];
+
+  // Initialize EVM providers
+  for (const chain of evmChains) {
+    try {
+      await getProvider(chain);
+    } catch (err: any) {
+      console.warn(`⚠️ Could not connect to ${chain}: ${err?.message}`);
     }
   }
 
-  return client.db("blockchain");
-}
-
-// --- Type Definitions ---
-interface DepositTransaction {
-  timestamp: Date;
-  [key: string]: unknown;
-}
-
-// --- Clean-up Old Records ---
-async function removeOldAddresses(cutoffTime: Date): Promise<DepositTransaction[]> {
-  const db = await ensureConnection();
-  const collection = db.collection<DepositTransaction>("DepositTransactions");
-
-  const query = { timestamp: { $lt: cutoffTime } };
-  const oldAddresses = await collection.find(query).toArray();
-
-  console.log(`🕒 Found ${oldAddresses.length} addresses older than cutoff time.`);
-
-  if (oldAddresses.length > 0) {
-    const result = await collection.deleteMany(query);
-    console.log(`🗑️ Deleted ${result.deletedCount} old addresses.`);
-  }
-
-  return oldAddresses;
-}
-
-// --- Telegram Commands ---
-bot.onText(/\/start/, (msg) => {
-  const opts = {
-    reply_markup: {
-      keyboard: [[{ text: "Run Delete Script" }]],
-      resize_keyboard: true,
-      one_time_keyboard: true,
-    },
-  };
-  bot.sendMessage(msg.chat.id, "👋 Welcome! Choose an action:", opts);
-});
-
-bot.on("message", async (msg) => {
-  if (msg.text === "Run Delete Script") {
-    bot.sendMessage(chatId, '⏱ Please specify the cutoff time (e.g., "5 hours", "2 days"):');
-
-    bot.once("message", async (response) => {
-      const inputText = (response.text ?? "").trim();
-      const [valueStr, unit] = inputText.split(" ");
-      const value = parseInt(valueStr);
-
-      if (!value || !["hours", "days"].includes(unit)) {
-        await bot.sendMessage(chatId, "❌ Invalid format. Use e.g. '5 hours' or '2 days'.");
-        return;
+  // Discover tokens from recent activity on each chain
+  console.log("\n🔍 Initial token discovery...");
+  
+  // EVM chains
+  for (const chain of evmChains) {
+    try {
+      const tokens = await discoverActiveTokens(chain, 100);
+      for (const address of tokens) {
+        tokenQueue.push({ address, chain });
       }
-
-      const cutoffTime = moment()
-        .subtract(value, unit as moment.unitOfTime.DurationConstructor)
-        .toDate();
-
-      const addresses = await removeOldAddresses(cutoffTime);
-      const msgText =
-        addresses.length > 0
-          ? `✅ Deleted ${addresses.length} addresses older than ${value} ${unit}.`
-          : `ℹ️ No addresses found older than ${value} ${unit}.`;
-
-      await bot.sendMessage(chatId, msgText);
-    });
+      console.log(`   [${CHAINS[chain].name}] Queued ${tokens.length} tokens`);
+    } catch (err: any) {
+      console.warn(`   [${CHAINS[chain].name}] Discovery failed: ${err?.message}`);
+    }
   }
+
+  // Solana (requires Moralis API key)
+  if (ENV.MORALIS_API_KEY) {
+    try {
+      const solTokens = await discoverSolanaTokens();
+      for (const address of solTokens) {
+        tokenQueue.push({ address, chain: "sol" });
+      }
+      console.log(`   [Solana] Queued ${solTokens.length} tokens`);
+    } catch (err: any) {
+      console.warn(`   [Solana] Discovery failed: ${err?.message}`);
+    }
+  } else {
+    console.log(`   [Solana] Skipped - MORALIS_API_KEY not set`);
+  }
+
+  // Watch for new tokens in real-time (EVM only)
+  for (const chain of evmChains) {
+    try {
+      await watchNewPairs(chain, (newToken: DiscoveredToken) => {
+        const key = getTokenKey(newToken.address, newToken.chain);
+        if (!analyzedTokens.has(key)) {
+          tokenQueue.push({ address: newToken.address, chain: newToken.chain });
+          console.log(`   Queued new token: ${newToken.address} on ${CHAINS[newToken.chain].name}`);
+        }
+      });
+    } catch (err: any) {
+      console.warn(`   Could not watch ${chain} pairs: ${err?.message}`);
+    }
+  }
+
+  // Process initial queue
+  console.log(`\n📋 Processing ${tokenQueue.length} tokens...`);
+  await processQueue();
+
+  // Continuous re-scan
+  setInterval(async () => {
+    console.log(`\n🔄 Re-scanning ${analyzedTokens.size} tokens...`);
+
+    for (const key of analyzedTokens) {
+      const parts = key.split("_");
+      const chain = parts[0] as ChainId;
+      const address = parts[1];
+      try {
+        await scanTokenForAccumulators(address, chain);
+      } catch (err: any) {
+        console.error(`Error re-scanning ${address}:`, err?.message);
+      }
+      await sleep(3000);
+    }
+
+    // Discover new Solana tokens periodically
+    if (ENV.MORALIS_API_KEY) {
+      try {
+        const solTokens = await discoverSolanaTokens();
+        for (const address of solTokens) {
+          const key = getTokenKey(address, "sol");
+          if (!analyzedTokens.has(key)) {
+            tokenQueue.push({ address, chain: "sol" });
+          }
+        }
+      } catch (err: any) {
+        // Silent fail for Solana discovery
+      }
+    }
+
+    // Process any new tokens
+    await processQueue();
+
+  }, CONFIG.SCAN_INTERVAL_MS);
+
+  console.log("\n✅ Bot running - watching for accumulation patterns on ETH, BSC & SOL...");
+}
+
+main().catch((err) => {
+  console.error("Fatal error:", err);
+  process.exit(1);
 });
 
-// --- Start Tracking + Cleanup ---
-(async () => {
-  try {
-    await ensureConnection();
-    console.log("🚀 Database ready. Starting deposit tracking...");
-
-    await startTrackingDeposits(); // ✅ runs the refactored tracker from track.ts
-
-    // Future expansion hooks:
-    // await SwapTrack(db);
-    // await startMEVTracking();
-  } catch (error) {
-    console.error("❌ Failed to start tracking:", error);
-  }
-})();
-
-// --- Graceful Shutdown ---
-process.once("SIGINT", async () => {
-  console.log("🛑 SIGINT received. Closing MongoDB and stopping bot...");
-  try {
-    await client?.close();
-  } catch {}
-  bot.stopPolling();
+process.once("SIGINT", () => {
+  console.log("\n🛑 Shutting down...");
   process.exit(0);
 });
