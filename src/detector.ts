@@ -144,9 +144,10 @@ export async function detectAccumulators(
     }
 
     // Quick pre-check: skip if total USD is way below threshold
-    if (totalUSDEstimate < CONFIG.MIN_CUMULATIVE_USD * 0.5) {
+    const preCheckThreshold = CONFIG.MIN_CUMULATIVE_USD * (CONFIG.PRE_CHECK_THRESHOLD_PERCENT / 100);
+    if (totalUSDEstimate < preCheckThreshold) {
       if (DEBUG) {
-        console.log(`   ⏭️ ${wallet} skipped: $${totalUSDEstimate.toFixed(0)} < $${CONFIG.MIN_CUMULATIVE_USD * 0.5} threshold`);
+        console.log(`   ⏭️ ${wallet} skipped: $${totalUSDEstimate.toFixed(0)} < $${preCheckThreshold.toFixed(0)} threshold`);
       }
       continue;
     }
@@ -331,7 +332,7 @@ async function detectSolanaAccumulators(tokenAddress: string): Promise<WalletAna
       await sleep(50);
     }
 
-    if (totalUSDEstimate < CONFIG.MIN_CUMULATIVE_USD * 0.5) {
+    if (totalUSDEstimate < CONFIG.MIN_CUMULATIVE_USD * (CONFIG.PRE_CHECK_THRESHOLD_PERCENT / 100)) {
       if (DEBUG) {
         console.log(`   ⏭️ ${wallet} skipped: $${totalUSDEstimate.toFixed(0)} < threshold`);
       }

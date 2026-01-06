@@ -12,7 +12,7 @@ import {
 } from "./providers";
 import { scanTokenForAccumulators } from "./detector";
 import { discoverActiveTokens, watchNewPairs } from "./discovery";
-import { discoverSolanaTokens } from "./solana-api";
+import { discoverSolanaTokens, discoverSolanaTokensViaHelius } from "./solana-api";
 import { CONFIG, ChainId, CHAINS, ENV } from "./appConfig";
 import { DiscoveredToken } from "./types";
 
@@ -101,10 +101,16 @@ async function main(): Promise<void> {
     }
   }
 
-  // Solana (requires Moralis API key)
-  if (ENV.MORALIS_API_KEY || process.env.MORALIS_API_KEYS) {
+  // Solana (try Moralis first, then Helius as fallback)
+  if (ENV.MORALIS_API_KEY || process.env.MORALIS_API_KEYS || process.env.HELIUS_API_KEY || process.env.HELIUS_API_KEYS) {
     try {
-      const solTokens = await discoverSolanaTokens();
+      let solTokens = await discoverSolanaTokens();
+      
+      // If Moralis returned nothing, try Helius
+      if (solTokens.length === 0) {
+        solTokens = await discoverSolanaTokensViaHelius();
+      }
+      
       for (const address of solTokens) {
         tokenQueue.push({ address, chain: "sol" });
       }
@@ -113,7 +119,7 @@ async function main(): Promise<void> {
       console.warn(`   [Solana] Discovery failed: ${err?.message}`);
     }
   } else {
-    console.log(`   [Solana] Skipped - MORALIS_API_KEY not set`);
+    console.log(`   [Solana] Skipped - no Moralis or Helius API key set`);
   }
 
   // Watch for new tokens in real-time (EVM only)

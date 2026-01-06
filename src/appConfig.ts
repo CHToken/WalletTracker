@@ -55,7 +55,7 @@ export const CHAINS: Record<ChainId, ChainConfig> = {
     name: "Solana",
     rpcEnvKey: "SOLANA_RPC_URL",
     explorerApiKey: "",
-    explorerUrl: "https://api.solscan.io",
+    explorerUrl: "", // Solscan public API only provides chain info, not useful
     wethAddress: "So11111111111111111111111111111111111111112", // Wrapped SOL
     stablecoins: [
       "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
@@ -66,6 +66,10 @@ export const CHAINS: Record<ChainId, ChainConfig> = {
       "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", // Orca Whirlpool
       "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8", // Raydium AMM
       "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK", // Raydium CLMM
+      "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG", // Meteora DAMM_V2
+      "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",  // Raydium CPMM
+      "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA", // Pump.fun AMM
+      "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"  // Pump.fun
     ],
   },
 };
@@ -83,18 +87,51 @@ export const ENV = {
   MORALIS_API_KEY: process.env.MORALIS_API_KEY ?? "",
 };
 
-// Detection thresholds - hardcoded defaults, can be overridden
+// Detection thresholds - load from config file, fallback to defaults
+import * as fs from "fs";
+import * as path from "path";
+
+interface AccumulationConfig {
+  thresholds?: {
+    minBuyCount?: number;
+    minCumulativeUSD?: number;
+    preCheckThresholdPercent?: number;
+    minBuySpacingMinutes?: number;
+    maxBuysPerHour?: number;
+    noSellHours?: number;
+    minBalanceRetentionPercent?: number;
+    maxUniqueTokensTraded?: number;
+    maxTxPerDay?: number;
+    evaluationWindowHours?: number;
+    scanIntervalMinutes?: number;
+  };
+}
+
+function loadConfig(): AccumulationConfig {
+  try {
+    const configPath = path.join(__dirname, "accumulation-config.json");
+    const raw = fs.readFileSync(configPath, "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+const fileConfig = loadConfig();
+const t = fileConfig.thresholds || {};
+
 export const CONFIG = {
-  EVALUATION_WINDOW_HOURS: 72,
-  MIN_BUY_COUNT: 5,
-  MIN_CUMULATIVE_USD: 10000,
-  MIN_BUY_SPACING_MINUTES: 10,
-  MAX_BUYS_PER_HOUR: 3,
-  NO_SELL_HOURS: 72,
-  MIN_BALANCE_RETENTION_PERCENT: 90,
-  MAX_UNIQUE_TOKENS_TRADED: 20,
-  MAX_TX_PER_DAY: 50,
-  SCAN_INTERVAL_MS: 5 * 60 * 1000,
+  EVALUATION_WINDOW_HOURS: t.evaluationWindowHours ?? 72,
+  MIN_BUY_COUNT: t.minBuyCount ?? 5,
+  MIN_CUMULATIVE_USD: t.minCumulativeUSD ?? 10000,
+  PRE_CHECK_THRESHOLD_PERCENT: t.preCheckThresholdPercent ?? 50,
+  MIN_BUY_SPACING_MINUTES: t.minBuySpacingMinutes ?? 10,
+  MAX_BUYS_PER_HOUR: t.maxBuysPerHour ?? 3,
+  NO_SELL_HOURS: t.noSellHours ?? 72,
+  MIN_BALANCE_RETENTION_PERCENT: t.minBalanceRetentionPercent ?? 90,
+  MAX_UNIQUE_TOKENS_TRADED: t.maxUniqueTokensTraded ?? 20,
+  MAX_TX_PER_DAY: t.maxTxPerDay ?? 50,
+  SCAN_INTERVAL_MS: (t.scanIntervalMinutes ?? 5) * 60 * 1000,
 };
 
 // Known exchange deposit addresses to exclude

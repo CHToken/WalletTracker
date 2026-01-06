@@ -189,6 +189,12 @@ export async function initMoralis(): Promise<void> {
 
 const BASE_URL = "https://deep-index.moralis.io/api/v2.2";
 
+// Export for use by solana-api.ts
+export function getHealthyMoralisKey(): string | null {
+  const keyInfo = getNextKey();
+  return keyInfo?.key || null;
+}
+
 async function moralisRequest<T>(
   endpoint: string,
   method: string,
@@ -404,10 +410,11 @@ export async function fetchDexSwapsViaMoralis(
   const fromDate = new Date(Date.now() - hoursBack * 60 * 60 * 1000);
   const swaps: SwapEvent[] = [];
   const chainConfig = CHAINS[chain];
-  const dexRouters = new Set(chainConfig.dexRouters.map(a => a.toLowerCase()));
   const tokenLower = tokenAddress.toLowerCase();
-  const knownPairs = new Set<string>();
-  const txTransfers = new Map<string, Array<{from: string, to: string, amount: bigint, timestamp: number, blockNumber: number}>>();
+  
+  // Collect all transfers first
+  const allTransfers: Array<{from: string, to: string, amount: bigint, timestamp: number, blockNumber: number, txHash: string}> = [];
+  const addressTransferCount = new Map<string, number>();
 
   let cursor: string | undefined;
   let pageCount = 0;
@@ -438,13 +445,16 @@ export async function fetchDexSwapsViaMoralis(
         const txHash = transfer.transaction_hash;
         const blockNumber = Number(transfer.block_number);
 
+        // Skip mints/burns
         if (from === "0x0000000000000000000000000000000000000000") continue;
         if (to === "0x0000000000000000000000000000000000000000") continue;
         if (amount === 0n) continue;
 
-        const existing = txTransfers.get(txHash) || [];
-        existing.push({ from, to, amount, timestamp, blockNumber });
-        txTransfers.set(txHash, existing);
+        allTransfers.push({ from, to, amount, timestamp, blockNumber, txHash });
+        
+        // Count transfers per address
+        addressTransferCount.set(from, (addressTransferCount.get(from) || 0) + 1);
+        addressTransferCount.set(to, (addressTransferCount.get(to) || 0) + 1);
       }
 
       cursor = data.cursor;
@@ -453,106 +463,59 @@ export async function fetchDexSwapsViaMoralis(
       if (cursor) await new Promise(r => setTimeout(r, 100));
     } while (cursor && pageCount < maxPages);
 
-    const seenSwaps = new Set<string>();
-    
-    for (const [txHash, transfers] of txTransfers) {
-      for (const t of transfers) {
-        const fromIsRouter = dexRouters.has(t.from);
-        const toIsRouter = dexRouters.has(t.to);
-        
-        if (fromIsRouter && !toIsRouter) {
-          const key = `${txHash}-buy-${t.to}`;
-          if (!seenSwaps.has(key)) {
-            seenSwaps.add(key);
-            swaps.push({
-              txHash,
-              blockNumber: t.blockNumber,
-              timestamp: t.timestamp,
-              wallet: t.to,
-              tokenIn: chainConfig.wethAddress,
-              tokenOut: tokenLower,
-              amountIn: 0n,
-              amountOut: t.amount,
-              isBuy: true,
-            });
-          }
-        }
-        
-        if (toIsRouter && !fromIsRouter) {
-          const key = `${txHash}-sell-${t.from}`;
-          if (!seenSwaps.has(key)) {
-            seenSwaps.add(key);
-            swaps.push({
-              txHash: txHash + "-sell",
-              blockNumber: t.blockNumber,
-              timestamp: t.timestamp,
-              wallet: t.from,
-              tokenIn: tokenLower,
-              tokenOut: chainConfig.wethAddress,
-              amountIn: t.amount,
-              amountOut: 0n,
-              isBuy: false,
-            });
-          }
-        }
-        
-        // Detect pairs from multi-transfer txs
-        if (transfers.length > 1) {
-          const addressCounts = new Map<string, number>();
-          for (const tr of transfers) {
-            addressCounts.set(tr.from, (addressCounts.get(tr.from) || 0) + 1);
-            addressCounts.set(tr.to, (addressCounts.get(tr.to) || 0) + 1);
-          }
-          for (const [addr, count] of addressCounts) {
-            if (count >= 2 && !dexRouters.has(addr)) {
-              knownPairs.add(addr);
-            }
-          }
-        }
+    // Identify likely pair/pool contracts (addresses with many transfers)
+    const likelyPairs = new Set<string>();
+    for (const [addr, count] of addressTransferCount) {
+      // If an address has 5+ transfers, it's likely a pair contract
+      if (count >= 5) {
+        likelyPairs.add(addr);
       }
     }
+
+    // Now detect swaps: transfers FROM pair TO wallet = BUY
+    const seenSwaps = new Set<string>();
     
-    // Second pass: detect swaps via known pairs
-    for (const [txHash, transfers] of txTransfers) {
-      for (const t of transfers) {
-        const fromIsPair = knownPairs.has(t.from);
-        const toIsPair = knownPairs.has(t.to);
-        if (dexRouters.has(t.from) || dexRouters.has(t.to)) continue;
-        
-        if (fromIsPair && !toIsPair) {
-          const key = `${txHash}-buy-${t.to}`;
-          if (!seenSwaps.has(key)) {
-            seenSwaps.add(key);
-            swaps.push({
-              txHash,
-              blockNumber: t.blockNumber,
-              timestamp: t.timestamp,
-              wallet: t.to,
-              tokenIn: chainConfig.wethAddress,
-              tokenOut: tokenLower,
-              amountIn: 0n,
-              amountOut: t.amount,
-              isBuy: true,
-            });
-          }
+    for (const t of allTransfers) {
+      const fromIsPair = likelyPairs.has(t.from);
+      const toIsPair = likelyPairs.has(t.to);
+      const fromIsEOA = !likelyPairs.has(t.from) && addressTransferCount.get(t.from)! < 10;
+      const toIsEOA = !likelyPairs.has(t.to) && addressTransferCount.get(t.to)! < 10;
+      
+      // BUY: from pair/contract → to EOA wallet
+      if (fromIsPair && toIsEOA) {
+        const key = `${t.txHash}-buy-${t.to}`;
+        if (!seenSwaps.has(key)) {
+          seenSwaps.add(key);
+          swaps.push({
+            txHash: t.txHash,
+            blockNumber: t.blockNumber,
+            timestamp: t.timestamp,
+            wallet: t.to,
+            tokenIn: chainConfig.wethAddress,
+            tokenOut: tokenLower,
+            amountIn: 0n,
+            amountOut: t.amount,
+            isBuy: true,
+          });
         }
-        
-        if (toIsPair && !fromIsPair) {
-          const key = `${txHash}-sell-${t.from}`;
-          if (!seenSwaps.has(key)) {
-            seenSwaps.add(key);
-            swaps.push({
-              txHash: txHash + "-sell",
-              blockNumber: t.blockNumber,
-              timestamp: t.timestamp,
-              wallet: t.from,
-              tokenIn: tokenLower,
-              tokenOut: chainConfig.wethAddress,
-              amountIn: t.amount,
-              amountOut: 0n,
-              isBuy: false,
-            });
-          }
+      }
+      
+      // SELL: from EOA wallet → to pair/contract
+      if (toIsPair && fromIsEOA) {
+        const key = `${t.txHash}-sell-${t.from}`;
+        if (!seenSwaps.has(key)) {
+          seenSwaps.add(key);
+          swaps.push({
+            txHash: t.txHash + "-sell",
+            blockNumber: t.blockNumber,
+            timestamp: t.timestamp,
+            wallet: t.from,
+            tokenIn: tokenLower,
+            tokenOut: chainConfig.wethAddress,
+            amountIn: t.amount,
+            amountOut: 0n,
+            isBuy: false,
+          });
         }
       }
     }

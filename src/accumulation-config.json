@@ -2,8 +2,9 @@
     "thresholds": {
         "minBuyCount": 3,
         "minCumulativeUSD": 1000,
+        "preCheckThresholdPercent": 80,
         "minBuySpacingMinutes": 5,
-        "maxBuysPerHour": 10,
+        "maxBuysPerHour": 2,
         "noSellHours": 24,
         "minBalanceRetentionPercent": 50,
         "maxUniqueTokensTraded": 50,
@@ -13,7 +14,8 @@
     },
     "productionThresholds": {
         "minBuyCount": 5,
-        "minCumulativeUSD": 10000,
+        "minCumulativeUSD": 2500,
+        "preCheckThresholdPercent": 50,
         "minBuySpacingMinutes": 10,
         "maxBuysPerHour": 3,
         "noSellHours": 72,

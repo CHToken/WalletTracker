@@ -1,15 +1,31 @@
 // src/solana-api.ts
-// Solana support using Moralis API + direct REST calls
+// Solana support using Moralis API + Helius + direct REST calls
 
 import Moralis from "moralis";
 import { SolNetwork } from "@moralisweb3/common-sol-utils";
 import axios from "axios";
 import { ENV, CHAINS } from "./appConfig";
 import { SwapEvent, TokenInfo } from "./types";
-import { initMoralis } from "./moralis-api";
+import { initMoralis, getHealthyMoralisKey } from "./moralis-api";
 
 // Re-export for backwards compatibility - uses shared initialization
 export const initMoralisSolana = initMoralis;
+
+// Helper to get a working Moralis key
+function getMoralisKey(): string {
+  const rotatedKey = getHealthyMoralisKey();
+  if (rotatedKey) return rotatedKey;
+  // Fallback to env var if no healthy keys
+  return ENV.MORALIS_API_KEY || "";
+}
+
+// Helper to get Helius key
+function getHeliusKey(): string | null {
+  const keys = process.env.HELIUS_API_KEYS || process.env.HELIUS_API_KEY;
+  if (!keys) return null;
+  const keyList = keys.split(',').map(k => k.trim()).filter(k => k.length > 0);
+  return keyList[0] || null;
+}
 
 export async function fetchSolanaSwaps(
   tokenAddress: string,
@@ -19,11 +35,17 @@ export async function fetchSolanaSwaps(
   const swaps: SwapEvent[] = [];
   const chainConfig = CHAINS.sol;
   const tokenLower = tokenAddress.toLowerCase();
+  const apiKey = getMoralisKey();
+  
+  if (!apiKey) {
+    console.warn("   [Solana] No Moralis API key available");
+    return [];
+  }
 
   try {
     const url = `https://solana-gateway.moralis.io/token/mainnet/${tokenAddress}/swaps`;
     const response = await axios.get(url, {
-      headers: { "X-API-Key": ENV.MORALIS_API_KEY, "Accept": "application/json" },
+      headers: { "X-API-Key": apiKey, "Accept": "application/json" },
       params: { limit: 100 },
       validateStatus: () => true,
     });
@@ -84,7 +106,7 @@ async function fetchSolanaTransfersAsFallback(tokenAddress: string): Promise<Swa
   try {
     const url = "https://solana-gateway.moralis.io/token/mainnet/" + tokenAddress + "/transfers";
     const response = await axios.get(url, {
-      headers: { "X-API-Key": ENV.MORALIS_API_KEY, "Accept": "application/json" },
+      headers: { "X-API-Key": getMoralisKey(), "Accept": "application/json" },
       params: { limit: 100 },
       validateStatus: () => true,
     });
@@ -192,7 +214,7 @@ export async function getSolanaWalletTxCount(wallet: string): Promise<number> {
   try {
     const url = "https://solana-gateway.moralis.io/account/mainnet/" + wallet + "/transactions";
     const response = await axios.get(url, {
-      headers: { "X-API-Key": ENV.MORALIS_API_KEY, "Accept": "application/json" },
+      headers: { "X-API-Key": getMoralisKey(), "Accept": "application/json" },
       params: { limit: 100 },
       validateStatus: () => true,
     });
@@ -241,20 +263,31 @@ export async function discoverSolanaTokens(): Promise<string[]> {
   try {
     const url = "https://solana-gateway.moralis.io/token/mainnet/" + CHAINS.sol.wethAddress + "/swaps";
     const response = await axios.get(url, {
-      headers: { "X-API-Key": ENV.MORALIS_API_KEY, "Accept": "application/json" },
+      headers: { "X-API-Key": getMoralisKey(), "Accept": "application/json" },
       params: { limit: 100 },
       validateStatus: () => true,
     });
-    if (response.status === 200 && Array.isArray(response.data)) {
-      for (const swap of response.data) {
-        const boughtAddr = swap.bought?.address || swap.tokenOut;
-        const soldAddr = swap.sold?.address || swap.tokenIn;
+    
+    if (response.status === 200) {
+      // Handle different response formats
+      const data = response.data;
+      const swaps = Array.isArray(data) ? data : (data?.result || data?.swaps || []);
+      
+      for (const swap of swaps) {
+        // Try multiple field names for token addresses
+        const boughtAddr = swap.bought?.address || swap.tokenOut || swap.baseToken?.address || swap.quoteToken?.address;
+        const soldAddr = swap.sold?.address || swap.tokenIn || swap.quoteToken?.address || swap.baseToken?.address;
+        
         if (boughtAddr && !baseTokens.has(boughtAddr.toLowerCase())) {
           tokens.add(boughtAddr);
         }
         if (soldAddr && !baseTokens.has(soldAddr.toLowerCase())) {
           tokens.add(soldAddr);
         }
+      }
+      
+      if (tokens.size === 0 && process.env.DEBUG_RPC) {
+        console.log("   [Solana] Response structure:", JSON.stringify(data).slice(0, 200));
       }
     } else {
       console.log("   [Solana] Token discovery limited - swaps endpoint returned " + response.status);
@@ -263,5 +296,76 @@ export async function discoverSolanaTokens(): Promise<string[]> {
     console.error("Error discovering Solana tokens:", err?.message);
   }
   console.log("   [Solana] Discovered " + tokens.size + " tokens");
+  return Array.from(tokens);
+}
+
+
+// Alternative: Discover tokens via Helius RPC (better Solana support)
+export async function discoverSolanaTokensViaHelius(): Promise<string[]> {
+  const heliusKey = getHeliusKey();
+  if (!heliusKey) {
+    return [];
+  }
+
+  const tokens = new Set<string>();
+  const baseTokens = new Set(CHAINS.sol.stablecoins.map(s => s.toLowerCase()));
+  baseTokens.add(CHAINS.sol.wethAddress.toLowerCase());
+
+  try {
+    // Use Helius RPC to get recent signatures for wrapped SOL
+    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
+    
+    // Get recent signatures
+    const sigResponse = await axios.post(rpcUrl, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "getSignaturesForAddress",
+      params: [CHAINS.sol.wethAddress, { limit: 50 }]
+    }, { validateStatus: () => true });
+
+    if (sigResponse.status === 200 && sigResponse.data?.result) {
+      const signatures = sigResponse.data.result.map((s: any) => s.signature);
+      
+      // Get transaction details for each signature (batch)
+      for (const sig of signatures.slice(0, 20)) {
+        try {
+          const txResponse = await axios.post(rpcUrl, {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getTransaction",
+            params: [sig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]
+          }, { validateStatus: () => true });
+
+          if (txResponse.status === 200 && txResponse.data?.result) {
+            const tx = txResponse.data.result;
+            // Extract token mints from pre/post token balances
+            const preBalances = tx.meta?.preTokenBalances || [];
+            const postBalances = tx.meta?.postTokenBalances || [];
+            
+            for (const balance of [...preBalances, ...postBalances]) {
+              const mint = balance.mint;
+              if (mint && !baseTokens.has(mint.toLowerCase())) {
+                tokens.add(mint);
+              }
+            }
+          }
+        } catch {
+          // Skip failed transactions
+        }
+        
+        // Small delay to respect rate limits
+        await new Promise(r => setTimeout(r, 100));
+      }
+    }
+    
+    if (tokens.size > 0) {
+      console.log(`   [Solana] Helius discovered ${tokens.size} tokens`);
+    }
+  } catch (err: any) {
+    if (process.env.DEBUG_RPC) {
+      console.error("Helius discovery error:", err?.message);
+    }
+  }
+
   return Array.from(tokens);
 }

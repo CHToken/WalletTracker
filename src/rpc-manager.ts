@@ -175,13 +175,35 @@ const PROVIDER_CONFIG = {
       return `wss://${hosts[chain]}/ws/v3/${key}`;
     },
   },
+
+  // HELIUS: Solana only - excellent free tier
+  // Free: 1M credits/month, 10 RPS, WebSocket included
+  // DAS API: 2 req/s, Enhanced APIs: 2 req/s
+  // Source: https://www.helius.dev/docs/billing/plans
+  helius: {
+    chains: ["sol"] as ChainId[],
+    rateLimit: 10,
+    monthlyLimit: 1000000,
+    supportsWebsocket: true,
+    priority: 1,
+    weight: 50,
+    buildUrl: (key: string, _chain: ChainId) => {
+      return `https://mainnet.helius-rpc.com/?api-key=${key}`;
+    },
+    buildWsUrl: (key: string, _chain: ChainId) => {
+      return `wss://mainnet.helius-rpc.com/?api-key=${key}`;
+    },
+  },
 };
 
 // Public fallbacks (no API key needed)
 const PUBLIC_ENDPOINTS: Record<ChainId, string[]> = {
   eth: ["https://cloudflare-eth.com", "https://eth.llamarpc.com"],
   bsc: ["https://bsc-dataseed.binance.org", "https://bsc-dataseed1.defibit.io"],
-  sol: ["https://api.mainnet-beta.solana.com"],
+  sol: [
+    "https://api.mainnet-beta.solana.com",
+    "https://solana-rpc.publicnode.com",
+  ],
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -206,6 +228,13 @@ function parseKeys(envVar: string | undefined): string[] {
   return envVar.split(',').map(k => k.trim()).filter(k => k.length > 0);
 }
 
+// Helper to get keys from multiple env vars (plural first, then singular)
+function getKeys(pluralVar: string, singularVar: string): string[] {
+  const plural = parseKeys(process.env[pluralVar]);
+  if (plural.length > 0) return plural;
+  return parseKeys(process.env[singularVar]);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ENDPOINT BUILDING
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -219,8 +248,7 @@ function buildAllEndpoints(): void {
   }
 
   // ALCHEMY - All chains
-  const alchemyKeys = parseKeys(process.env.ALCHEMY_API_KEYS) || 
-                      parseKeys(process.env.ALCHEMY_API_KEY);
+  const alchemyKeys = getKeys('ALCHEMY_API_KEYS', 'ALCHEMY_API_KEY');
   alchemyKeys.forEach((key, idx) => {
     const config = PROVIDER_CONFIG.alchemy;
     const keyId = `alchemy-${idx + 1}`;
@@ -262,8 +290,7 @@ function buildAllEndpoints(): void {
   });
 
   // ANKR - ETH + BSC only
-  const ankrKeys = parseKeys(process.env.ANKR_API_KEYS) || 
-                   parseKeys(process.env.ANKR_API_KEY);
+  const ankrKeys = getKeys('ANKR_API_KEYS', 'ANKR_API_KEY');
   ankrKeys.forEach((key, idx) => {
     const config = PROVIDER_CONFIG.ankr;
     const keyId = `ankr-${idx + 1}`;
@@ -304,8 +331,7 @@ function buildAllEndpoints(): void {
   });
 
   // GETBLOCK - ETH keys
-  const getblockEthKeys = parseKeys(process.env.GETBLOCK_ETH_KEYS) || 
-                          parseKeys(process.env.GETBLOCK_ETH_KEY);
+  const getblockEthKeys = getKeys('GETBLOCK_ETH_KEYS', 'GETBLOCK_ETH_KEY');
   getblockEthKeys.forEach((key, idx) => {
     const config = PROVIDER_CONFIG.getblock;
     const keyId = `getblock-eth-${idx + 1}`;
@@ -344,8 +370,7 @@ function buildAllEndpoints(): void {
   });
 
   // GETBLOCK - BSC keys
-  const getblockBscKeys = parseKeys(process.env.GETBLOCK_BSC_KEYS) || 
-                          parseKeys(process.env.GETBLOCK_BSC_KEY);
+  const getblockBscKeys = getKeys('GETBLOCK_BSC_KEYS', 'GETBLOCK_BSC_KEY');
   getblockBscKeys.forEach((key, idx) => {
     const config = PROVIDER_CONFIG.getblock;
     const keyId = `getblock-bsc-${idx + 1}`;
@@ -470,8 +495,7 @@ function buildAllEndpoints(): void {
   }
 
   // INFURA - ETH + BSC
-  const infuraKeys = parseKeys(process.env.INFURA_API_KEYS) || 
-                     parseKeys(process.env.INFURA_API_KEY);
+  const infuraKeys = getKeys('INFURA_API_KEYS', 'INFURA_API_KEY');
   infuraKeys.forEach((key, idx) => {
     const config = PROVIDER_CONFIG.infura;
     const keyId = `infura-${idx + 1}`;
@@ -510,6 +534,46 @@ function buildAllEndpoints(): void {
         wsProvider: null,
       });
     }
+  });
+
+  // HELIUS - Solana only
+  const heliusKeys = getKeys('HELIUS_API_KEYS', 'HELIUS_API_KEY');
+  heliusKeys.forEach((key, idx) => {
+    const config = PROVIDER_CONFIG.helius;
+    const keyId = `helius-${idx + 1}`;
+    
+    const keyHealth: KeyHealth = {
+      key: {
+        id: keyId,
+        provider: "helius",
+        keyIndex: idx,
+        chains: config.chains,
+        rateLimit: config.rateLimit,
+        monthlyLimit: config.monthlyLimit,
+        supportsWebsocket: config.supportsWebsocket,
+        priority: config.priority,
+        weight: config.weight,
+      },
+      isHealthy: true,
+      lastError: null,
+      requestCount: 0,
+      dailyRequests: 0,
+      monthlyRequests: 0,
+      lastRequestTime: 0,
+      avgResponseTime: 0,
+      consecutiveFailures: 0,
+      lastResetDay: now.getDate(),
+      lastResetMonth: now.getMonth(),
+    };
+    keyHealthMap.set(keyId, keyHealth);
+
+    chainEndpoints.get("sol")!.push({
+      keyHealth,
+      url: config.buildUrl(key, "sol"),
+      wsUrl: config.buildWsUrl(key, "sol"),
+      provider: null,
+      wsProvider: null,
+    });
   });
 
   // PUBLIC FALLBACKS (no API key)
