@@ -159,8 +159,9 @@ export async function detectAccumulators(
       validAccumulators.push(analysis);
       console.log(`   ✅ ACCUMULATOR FOUND: ${wallet}`);
       console.log(`      Buys: ${analysis.buyCount} | Total: $${analysis.totalUSD.toFixed(2)} | Retention: ${analysis.balanceRetentionPercent}%`);
-    } else if (DEBUG) {
-      // Show why candidates failed (for debugging)
+      console.log(`      Total Tx: ${analysis.totalDexTrades} | Unique Tokens: ${analysis.uniqueTokensTraded}`);
+    } else {
+      // Always show why candidates failed
       console.log(`   ❌ ${wallet} failed: ${analysis.failureReasons.join(', ')}`);
     }
 
@@ -252,7 +253,7 @@ export async function scanOnce(tokenAddress: string, chain: ChainId = "eth"): Pr
     console.log(`  Buys: ${acc.buyCount} | Total: $${acc.totalUSD.toFixed(2)}`);
     console.log(`  Balance Retention: ${acc.balanceRetentionPercent}%`);
     console.log(`  Has Sold: ${acc.hasSold}`);
-    console.log(`  Unique Tokens Traded: ${acc.uniqueTokensTraded}`);
+    console.log(`  Unique Tokens: ${acc.uniqueTokensTraded} | Total Tx: ${acc.totalDexTrades}`);
     console.log(`  Avg Tx/Day: ${acc.avgTxPerDay.toFixed(1)}`);
     if (acc.failureReasons.length > 0) {
       console.log(`  Issues: ${acc.failureReasons.join(", ")}`);
@@ -346,7 +347,8 @@ async function detectSolanaAccumulators(tokenAddress: string): Promise<WalletAna
       validAccumulators.push(analysis);
       console.log(`   ✅ ACCUMULATOR FOUND: ${wallet}`);
       console.log(`      Buys: ${analysis.buyCount} | Total: $${analysis.totalUSD.toFixed(2)} | Retention: ${analysis.balanceRetentionPercent}%`);
-    } else if (DEBUG) {
+      console.log(`      Total Tx: ${analysis.totalDexTrades} | Unique Tokens: ${analysis.uniqueTokensTraded}`);
+    } else {
       console.log(`   ❌ ${wallet} failed: ${analysis.failureReasons.join(', ')}`);
     }
 

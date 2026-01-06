@@ -137,12 +137,17 @@ export async function analyzeWallet(
     failureReasons.push("Wallet is a smart contract (not EOA)");
   }
 
-  // 7. Token diversity filter (not trading too many tokens)
+  // 7. Token diversity filter - max 5 OTHER tokens traded (excluding target token)
   if (uniqueTokensTraded > CONFIG.MAX_UNIQUE_TOKENS_TRADED) {
-    failureReasons.push(`Trades ${uniqueTokensTraded} different tokens (max ${CONFIG.MAX_UNIQUE_TOKENS_TRADED})`);
+    failureReasons.push(`Traded ${uniqueTokensTraded} other tokens (max ${CONFIG.MAX_UNIQUE_TOKENS_TRADED})`);
   }
 
-  // 8. Transaction frequency filter (not high-frequency)
+  // 8. Total transaction count filter - max 500 total transactions
+  if (totalTxCount > CONFIG.MAX_TOTAL_TRADES) {
+    failureReasons.push(`${totalTxCount} total transactions (max ${CONFIG.MAX_TOTAL_TRADES})`);
+  }
+
+  // 9. Transaction frequency filter (not high-frequency)
   if (avgTxPerDay > CONFIG.MAX_TX_PER_DAY) {
     failureReasons.push(`${avgTxPerDay.toFixed(1)} tx/day average (max ${CONFIG.MAX_TX_PER_DAY})`);
   }
@@ -162,6 +167,7 @@ export async function analyzeWallet(
     lastSellTimestamp,
     isContract: walletIsContract,
     uniqueTokensTraded,
+    totalDexTrades: totalTxCount,
     avgTxPerDay,
     buyTimings,
     isValidAccumulator: failureReasons.length === 0,

@@ -27,6 +27,7 @@ export interface WalletAnalysis {
   lastSellTimestamp: number | null;
   isContract: boolean;
   uniqueTokensTraded: number;
+  totalDexTrades: number;
   avgTxPerDay: number;
   buyTimings: number[];
   isValidAccumulator: boolean;

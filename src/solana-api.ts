@@ -11,6 +11,20 @@ import { initMoralis, getHealthyMoralisKey } from "./moralis-api";
 // Re-export for backwards compatibility - uses shared initialization
 export const initMoralisSolana = initMoralis;
 
+/**
+ * Validate Solana address format (Base58, 32-44 chars, mixed case)
+ */
+function isValidSolanaAddress(address: string): boolean {
+  if (!address || address.length < 32 || address.length > 44) return false;
+  // Base58 alphabet (no 0, O, I, l)
+  const base58Regex = /^[1-9A-HJ-NP-Za-km-z]+$/;
+  if (!base58Regex.test(address)) return false;
+  // Must have mixed case (lowercase-only addresses are invalid)
+  const hasUpper = /[A-Z]/.test(address);
+  const hasLower = /[a-z]/.test(address);
+  return hasUpper && hasLower;
+}
+
 // Helper to get a working Moralis key
 function getMoralisKey(): string {
   const rotatedKey = getHealthyMoralisKey();
@@ -31,6 +45,12 @@ export async function fetchSolanaSwaps(
   tokenAddress: string,
   _hoursBack: number = 72
 ): Promise<SwapEvent[]> {
+  // Validate Solana address format before making API call
+  if (!isValidSolanaAddress(tokenAddress)) {
+    console.log(`   [Solana] Skipping invalid address: ${tokenAddress}`);
+    return [];
+  }
+
   await initMoralisSolana();
   const swaps: SwapEvent[] = [];
   const chainConfig = CHAINS.sol;
@@ -257,6 +277,125 @@ export async function getSolanaUniqueTokensTraded(wallet: string): Promise<numbe
   }
 }
 
+/**
+ * Get unique tokens traded on DEX (excluding the target token)
+ * Only counts tokens involved in DEX swap transactions
+ */
+export async function getSolanaUniqueDexTokensTraded(wallet: string, excludeToken: string): Promise<number> {
+  await initMoralisSolana();
+  const excludeTokenLower = excludeToken.toLowerCase();
+  const dexTradedTokens = new Set<string>();
+  
+  try {
+    // Get wallet's swap history
+    const url = "https://solana-gateway.moralis.io/account/mainnet/" + wallet + "/swaps";
+    const response = await axios.get(url, {
+      headers: { "X-API-Key": getMoralisKey(), "Accept": "application/json" },
+      params: { limit: 200 },
+      validateStatus: () => true,
+    });
+    
+    if (response.status === 200) {
+      const swaps = Array.isArray(response.data) ? response.data : (response.data?.result || []);
+      
+      for (const swap of swaps) {
+        // Extract token addresses from swap
+        const boughtAddr = (swap.bought?.address || swap.tokenOut || "").toLowerCase();
+        const soldAddr = (swap.sold?.address || swap.tokenIn || "").toLowerCase();
+        
+        // Add tokens that aren't the excluded target token
+        if (boughtAddr && boughtAddr !== excludeTokenLower) {
+          dexTradedTokens.add(boughtAddr);
+        }
+        if (soldAddr && soldAddr !== excludeTokenLower) {
+          dexTradedTokens.add(soldAddr);
+        }
+      }
+    }
+    
+    // Fallback: check token transfers if swaps endpoint doesn't work
+    if (dexTradedTokens.size === 0) {
+      const transferUrl = "https://solana-gateway.moralis.io/account/mainnet/" + wallet + "/tokens";
+      const transferResp = await axios.get(transferUrl, {
+        headers: { "X-API-Key": getMoralisKey(), "Accept": "application/json" },
+        validateStatus: () => true,
+      });
+      
+      if (transferResp.status === 200 && Array.isArray(transferResp.data)) {
+        for (const token of transferResp.data) {
+          const mint = (token.mint || token.address || "").toLowerCase();
+          if (mint && mint !== excludeTokenLower) {
+            dexTradedTokens.add(mint);
+          }
+        }
+      }
+    }
+  } catch {
+    // Return 0 on error
+  }
+  
+  return dexTradedTokens.size;
+}
+
+/**
+ * Get total DEX trades count for a Solana wallet across all tokens
+ * Counts swap transactions by looking for interactions with known DEX programs
+ */
+export async function getSolanaWalletDexTrades(wallet: string): Promise<number> {
+  await initMoralisSolana();
+  const dexPrograms = new Set(CHAINS.sol.dexRouters.map(a => a.toLowerCase()));
+  
+  try {
+    // Try swaps endpoint first
+    const swapsUrl = "https://solana-gateway.moralis.io/account/mainnet/" + wallet + "/swaps";
+    const swapsResp = await axios.get(swapsUrl, {
+      headers: { "X-API-Key": getMoralisKey(), "Accept": "application/json" },
+      params: { limit: 200 },
+      validateStatus: () => true,
+    });
+    
+    if (swapsResp.status === 200) {
+      const swaps = Array.isArray(swapsResp.data) ? swapsResp.data : (swapsResp.data?.result || []);
+      if (swaps.length > 0) {
+        return swaps.length;
+      }
+    }
+    
+    // Fallback to transactions endpoint
+    const url = "https://solana-gateway.moralis.io/account/mainnet/" + wallet + "/transactions";
+    const response = await axios.get(url, {
+      headers: { "X-API-Key": getMoralisKey(), "Accept": "application/json" },
+      params: { limit: 200 },
+      validateStatus: () => true,
+    });
+    
+    if (response.status === 200 && Array.isArray(response.data)) {
+      let dexTradeCount = 0;
+      for (const tx of response.data) {
+        // Check if transaction involves any DEX program
+        const programIds = tx.programIds || tx.instructions?.map((i: any) => i.programId) || [];
+        for (const programId of programIds) {
+          if (dexPrograms.has(programId?.toLowerCase())) {
+            dexTradeCount++;
+            break; // Count each tx only once even if multiple DEX programs involved
+          }
+        }
+      }
+      return dexTradeCount;
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * @deprecated Use getSolanaWalletDexTrades instead
+ */
+export async function getSolanaTotalDexTrades(wallet: string): Promise<number> {
+  return getSolanaWalletDexTrades(wallet);
+}
+
 export async function isSolanaProgram(address: string): Promise<boolean> {
   const knownPrograms = new Set([
     ...CHAINS.sol.dexRouters,
@@ -291,10 +430,11 @@ export async function discoverSolanaTokens(): Promise<string[]> {
         const boughtAddr = swap.bought?.address || swap.tokenOut || swap.baseToken?.address || swap.quoteToken?.address;
         const soldAddr = swap.sold?.address || swap.tokenIn || swap.quoteToken?.address || swap.baseToken?.address;
         
-        if (boughtAddr && !baseTokens.has(boughtAddr.toLowerCase())) {
+        // Only add valid Solana addresses (Base58, mixed case, 32-44 chars)
+        if (boughtAddr && isValidSolanaAddress(boughtAddr) && !baseTokens.has(boughtAddr.toLowerCase())) {
           tokens.add(boughtAddr);
         }
-        if (soldAddr && !baseTokens.has(soldAddr.toLowerCase())) {
+        if (soldAddr && isValidSolanaAddress(soldAddr) && !baseTokens.has(soldAddr.toLowerCase())) {
           tokens.add(soldAddr);
         }
       }
@@ -357,7 +497,8 @@ export async function discoverSolanaTokensViaHelius(): Promise<string[]> {
             
             for (const balance of [...preBalances, ...postBalances]) {
               const mint = balance.mint;
-              if (mint && !baseTokens.has(mint.toLowerCase())) {
+              // Only add valid Solana addresses
+              if (mint && isValidSolanaAddress(mint) && !baseTokens.has(mint.toLowerCase())) {
                 tokens.add(mint);
               }
             }

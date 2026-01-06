@@ -1,26 +1,32 @@
 {
     "thresholds": {
         "minBuyCount": 3,
-        "minCumulativeUSD": 1000,
+        "minCumulativeUSD": 8000,
         "preCheckThresholdPercent": 80,
         "minBuySpacingMinutes": 5,
         "maxBuysPerHour": 2,
         "noSellHours": 24,
         "minBalanceRetentionPercent": 50,
-        "maxUniqueTokensTraded": 50,
+        "maxUniqueTokensTraded": 5,
+        "maxTotalTrades": 100,
         "maxTxPerDay": 100,
         "evaluationWindowHours": 72,
         "scanIntervalMinutes": 5
     },
     "productionThresholds": {
         "minBuyCount": 5,
-        "minCumulativeUSD": 2500,
+        "minCumulativeUSD": 10000,
         "preCheckThresholdPercent": 50,
         "minBuySpacingMinutes": 10,
         "maxBuysPerHour": 3,
         "noSellHours": 72,
         "minBalanceRetentionPercent": 90,
-        "maxUniqueTokensTraded": 20,
+        "maxUniqueTokensTraded": 5,
+        "maxTotalTrades": 100,
         "maxTxPerDay": 50
+    },
+    "_comments": {
+        "maxUniqueTokensTraded": "Max OTHER tokens wallet has swapped on DEX - max 5",
+        "maxTotalTrades": "Max total wallet transactions - max 100"
     }
 }

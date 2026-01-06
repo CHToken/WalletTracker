@@ -2,7 +2,7 @@
 import { ethers } from "ethers";
 import axios from "axios";
 import { getProvider } from "./providers";
-import { ENV, CHAINS, ChainId, ERC20_ABI, EXCHANGE_ADDRESSES } from "./appConfig";
+import { ENV, CHAINS, ChainId, ERC20_ABI, EXCHANGE_ADDRESSES, ETHERSCAN_V2_URL } from "./appConfig";
 import { TokenInfo, SwapEvent } from "./types";
 
 // Event signatures for DEX swaps
@@ -103,13 +103,38 @@ export async function getTokenPriceUSD(tokenAddress: string, chain: ChainId = "e
 export async function getWalletTxCount(wallet: string, chain: ChainId = "eth"): Promise<number> {
   try {
     const chainConfig = CHAINS[chain];
-    const apiKey = ENV[chainConfig.explorerApiKey as keyof typeof ENV] as string;
-    if (!apiKey) return 0;
+    const apiKey = ENV.ETHERSCAN_API_KEY;
     
-    const url = `${chainConfig.explorerUrl}?module=account&action=txlist&address=${wallet}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}`;
-    const resp = await axios.get(url, { timeout: 15000 });
-    return Array.isArray(resp.data?.result) ? resp.data.result.length : 0;
-  } catch {
+    // Use Etherscan V2 API
+    if (apiKey && chainConfig.chainId > 0) {
+      const url = `${ETHERSCAN_V2_URL}?chainid=${chainConfig.chainId}&module=account&action=txlist&address=${wallet}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}`;
+      const resp = await axios.get(url, { timeout: 15000 });
+      if (resp.data?.status === "1" && Array.isArray(resp.data?.result)) {
+        return resp.data.result.length;
+      }
+    }
+    
+    // Fallback to Moralis if Etherscan fails
+    if (ENV.MORALIS_API_KEY) {
+      const chainMap: Record<string, string> = { eth: "eth", bsc: "bsc" };
+      const moralisChain = chainMap[chain];
+      if (moralisChain) {
+        const url = `https://deep-index.moralis.io/api/v2.2/${wallet}?chain=${moralisChain}`;
+        const resp = await axios.get(url, {
+          headers: { "X-API-Key": ENV.MORALIS_API_KEY },
+          timeout: 15000,
+        });
+        if (Array.isArray(resp.data?.result)) {
+          return resp.data.result.length;
+        }
+      }
+    }
+    
+    return 0;
+  } catch (err: any) {
+    if (process.env.DEBUG_RPC) {
+      console.log(`   [Etherscan] getWalletTxCount error: ${err?.message}`);
+    }
     return 0;
   }
 }
@@ -117,18 +142,128 @@ export async function getWalletTxCount(wallet: string, chain: ChainId = "eth"): 
 export async function getUniqueTokensTraded(wallet: string, chain: ChainId = "eth"): Promise<number> {
   try {
     const chainConfig = CHAINS[chain];
-    const apiKey = ENV[chainConfig.explorerApiKey as keyof typeof ENV] as string;
-    if (!apiKey) return 0;
+    const apiKey = ENV.ETHERSCAN_API_KEY;
     
-    const url = `${chainConfig.explorerUrl}?module=account&action=tokentx&address=${wallet}&sort=desc&apikey=${apiKey}`;
-    const resp = await axios.get(url, { timeout: 15000 });
-    if (!Array.isArray(resp.data?.result)) return 0;
-
-    const tokens = new Set<string>();
-    for (const tx of resp.data.result) {
-      tokens.add(tx.contractAddress?.toLowerCase());
+    // Use Etherscan V2 API
+    if (apiKey && chainConfig.chainId > 0) {
+      const url = `${ETHERSCAN_V2_URL}?chainid=${chainConfig.chainId}&module=account&action=tokentx&address=${wallet}&sort=desc&apikey=${apiKey}`;
+      const resp = await axios.get(url, { timeout: 15000 });
+      if (resp.data?.status === "1" && Array.isArray(resp.data?.result)) {
+        const tokens = new Set<string>();
+        for (const tx of resp.data.result) {
+          tokens.add(tx.contractAddress?.toLowerCase());
+        }
+        return tokens.size;
+      }
     }
-    return tokens.size;
+    
+    // Fallback to Moralis if Etherscan fails
+    if (ENV.MORALIS_API_KEY) {
+      const chainMap: Record<string, string> = { eth: "eth", bsc: "bsc" };
+      const moralisChain = chainMap[chain];
+      if (moralisChain) {
+        const url = `https://deep-index.moralis.io/api/v2.2/${wallet}/erc20/transfers?chain=${moralisChain}&limit=100`;
+        const resp = await axios.get(url, {
+          headers: { "X-API-Key": ENV.MORALIS_API_KEY },
+          timeout: 15000,
+        });
+        if (Array.isArray(resp.data?.result)) {
+          const tokens = new Set<string>();
+          for (const tx of resp.data.result) {
+            tokens.add(tx.address?.toLowerCase());
+          }
+          return tokens.size;
+        }
+      }
+    }
+    
+    return 0;
+  } catch (err: any) {
+    if (process.env.DEBUG_RPC) {
+      console.log(`   [Etherscan] getUniqueTokensTraded error: ${err?.message}`);
+    }
+    return 0;
+  }
+}
+
+/**
+ * Get unique tokens traded on DEX (excluding the target token)
+ * Only counts tokens involved in DEX swap transactions, not all token transfers
+ */
+export async function getUniqueDexTokensTraded(wallet: string, excludeToken: string, chain: ChainId = "eth"): Promise<number> {
+  try {
+    const chainConfig = CHAINS[chain];
+    const apiKey = ENV.ETHERSCAN_API_KEY;
+    if (!apiKey || chainConfig.chainId === 0) return 0;
+    
+    const dexRouters = new Set(chainConfig.dexRouters.map(a => a.toLowerCase()));
+    const excludeTokenLower = excludeToken.toLowerCase();
+    
+    // Get all transactions for the wallet using V2 API
+    const txUrl = `${ETHERSCAN_V2_URL}?chainid=${chainConfig.chainId}&module=account&action=txlist&address=${wallet}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}`;
+    const txResp = await axios.get(txUrl, { timeout: 15000 });
+    if (txResp.data?.status !== "1" || !Array.isArray(txResp.data?.result)) return 0;
+
+    // Find transaction hashes that interact with DEX routers
+    const dexTxHashes = new Set<string>();
+    for (const tx of txResp.data.result) {
+      const toAddress = tx.to?.toLowerCase();
+      if (toAddress && dexRouters.has(toAddress)) {
+        dexTxHashes.add(tx.hash.toLowerCase());
+      }
+    }
+
+    if (dexTxHashes.size === 0) return 0;
+
+    // Get token transfers and filter to only those in DEX transactions
+    const tokenUrl = `${ETHERSCAN_V2_URL}?chainid=${chainConfig.chainId}&module=account&action=tokentx&address=${wallet}&sort=desc&apikey=${apiKey}`;
+    const tokenResp = await axios.get(tokenUrl, { timeout: 15000 });
+    if (tokenResp.data?.status !== "1" || !Array.isArray(tokenResp.data?.result)) return 0;
+
+    const dexTradedTokens = new Set<string>();
+    for (const tx of tokenResp.data.result) {
+      const tokenAddress = tx.contractAddress?.toLowerCase();
+      const txHash = tx.hash?.toLowerCase();
+      
+      // Only count tokens from DEX transactions, excluding the target token
+      if (txHash && dexTxHashes.has(txHash) && tokenAddress && tokenAddress !== excludeTokenLower) {
+        dexTradedTokens.add(tokenAddress);
+      }
+    }
+    
+    return dexTradedTokens.size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Get total DEX trades count for a wallet across all tokens
+ * Counts swap transactions by looking for interactions with known DEX routers
+ */
+export async function getWalletTotalDexTrades(wallet: string, chain: ChainId = "eth"): Promise<number> {
+  try {
+    const chainConfig = CHAINS[chain];
+    const apiKey = ENV.ETHERSCAN_API_KEY;
+    if (!apiKey || chainConfig.chainId === 0) return 0;
+    
+    const dexRouters = new Set(chainConfig.dexRouters.map(a => a.toLowerCase()));
+    
+    // Get all transactions for the wallet using V2 API
+    const url = `${ETHERSCAN_V2_URL}?chainid=${chainConfig.chainId}&module=account&action=txlist&address=${wallet}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}`;
+    const resp = await axios.get(url, { timeout: 15000 });
+    if (resp.data?.status !== "1" || !Array.isArray(resp.data?.result)) return 0;
+
+    let dexTradeCount = 0;
+    for (const tx of resp.data.result) {
+      // Count transactions that interact with DEX routers
+      const toAddress = tx.to?.toLowerCase();
+      if (toAddress && dexRouters.has(toAddress)) {
+        dexTradeCount++;
+      }
+    }
+    
+    return dexTradeCount;
   } catch {
     return 0;
   }

@@ -7,20 +7,23 @@ export type ChainId = "eth" | "bsc" | "sol";
 
 interface ChainConfig {
   name: string;
+  chainId: number;  // For Etherscan V2 API
   rpcEnvKey: string;
   explorerApiKey: string;
-  explorerUrl: string;
   wethAddress: string;
   stablecoins: string[];
   dexRouters: string[];
 }
 
+// Etherscan V2 unified API endpoint
+export const ETHERSCAN_V2_URL = "https://api.etherscan.io/v2/api";
+
 export const CHAINS: Record<ChainId, ChainConfig> = {
   eth: {
     name: "Ethereum",
+    chainId: 1,
     rpcEnvKey: "ETH_RPC_URL",
     explorerApiKey: "ETHERSCAN_API_KEY",
-    explorerUrl: "https://api.etherscan.io/api",
     wethAddress: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
     stablecoins: [
       "0xdac17f958d2ee523a2206206994597c13d831ec7",
@@ -37,9 +40,9 @@ export const CHAINS: Record<ChainId, ChainConfig> = {
   },
   bsc: {
     name: "BSC",
+    chainId: 56,
     rpcEnvKey: "BSC_RPC_URL",
-    explorerApiKey: "BSCSCAN_API_KEY",
-    explorerUrl: "https://api.bscscan.com/api",
+    explorerApiKey: "ETHERSCAN_API_KEY",  // V2 uses same key for all chains
     wethAddress: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
     stablecoins: [
       "0x55d398326f99059ff775485246999027b3197955",
@@ -53,9 +56,9 @@ export const CHAINS: Record<ChainId, ChainConfig> = {
   },
   sol: {
     name: "Solana",
+    chainId: 0,  // Not applicable for Solana
     rpcEnvKey: "SOLANA_RPC_URL",
     explorerApiKey: "",
-    explorerUrl: "", // Solscan public API only provides chain info, not useful
     wethAddress: "So11111111111111111111111111111111111111112", // Wrapped SOL
     stablecoins: [
       "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
@@ -82,8 +85,7 @@ export const ENV = {
   ETH_RPC_URL: process.env.ETH_RPC_URL ?? "",
   BSC_RPC_URL: process.env.BSC_RPC_URL ?? "https://bsc-dataseed.binance.org",
   SOLANA_RPC_URL: process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com",
-  ETHERSCAN_API_KEY: process.env.ETHERSCAN_API_KEY ?? "",
-  BSCSCAN_API_KEY: process.env.BSCSCAN_API_KEY ?? process.env.ETHERSCAN_API_KEY ?? "",
+  ETHERSCAN_API_KEY: process.env.ETHERSCAN_API_KEY ?? "",  // V2 uses single key for all chains
   MORALIS_API_KEY: process.env.MORALIS_API_KEY ?? "",
 };
 
@@ -101,6 +103,7 @@ interface AccumulationConfig {
     noSellHours?: number;
     minBalanceRetentionPercent?: number;
     maxUniqueTokensTraded?: number;
+    maxTotalTrades?: number;
     maxTxPerDay?: number;
     evaluationWindowHours?: number;
     scanIntervalMinutes?: number;
@@ -129,7 +132,8 @@ export const CONFIG = {
   MAX_BUYS_PER_HOUR: t.maxBuysPerHour ?? 3,
   NO_SELL_HOURS: t.noSellHours ?? 72,
   MIN_BALANCE_RETENTION_PERCENT: t.minBalanceRetentionPercent ?? 90,
-  MAX_UNIQUE_TOKENS_TRADED: t.maxUniqueTokensTraded ?? 20,
+  MAX_UNIQUE_TOKENS_TRADED: t.maxUniqueTokensTraded ?? 5,
+  MAX_TOTAL_TRADES: t.maxTotalTrades ?? 100,
   MAX_TX_PER_DAY: t.maxTxPerDay ?? 50,
   SCAN_INTERVAL_MS: (t.scanIntervalMinutes ?? 5) * 60 * 1000,
 };
