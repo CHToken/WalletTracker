@@ -21,7 +21,7 @@ import {
   printStats,
   closeLogger
 } from "./rpc-logger";
-import { getMoralisStatus } from "./moralis-api";
+import { getMoralisStatus, getTotalCUUsed, getRemainingCU } from "./moralis-api";
 import { setRateLimitsCollection, loadRateLimits, saveRateLimits } from "./storage";
 
 let bot: Telegraf | null = null;
@@ -93,6 +93,17 @@ export function getRequestLogs(count: number = 50) {
 
 export function printRequestStats() {
   printStats();
+  
+  // Also print Moralis CU status
+  const moralisStatus = getMoralisStatus();
+  if (moralisStatus.length > 0) {
+    const totalUsed = getTotalCUUsed();
+    const remaining = getRemainingCU();
+    console.log(`\n📊 Moralis CU: ${totalUsed.toLocaleString()} used | ${remaining.toLocaleString()} remaining`);
+    for (const key of moralisStatus) {
+      console.log(`   Key ${key.index + 1}: ${key.dailyCU.toLocaleString()} CU (${key.cuUsed}) ${key.healthy ? '✓' : '✗'}`);
+    }
+  }
 }
 
 export function getAllProviderStatus() {

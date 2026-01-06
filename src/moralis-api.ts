@@ -1,12 +1,48 @@
 // src/moralis-api.ts
-// Moralis API with multi-account support, auto-rotation, zero-lag switching
+// Moralis API with multi-account support using direct REST calls
 // 40K CU/day per account - resets daily!
 
-import Moralis from "moralis";
-import { EvmChain } from "@moralisweb3/common-evm-utils";
 import { ENV, CHAINS, ChainId } from "./appConfig";
 import { SwapEvent, TokenInfo } from "./types";
 import { logMoralisRequest } from "./rpc-logger";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CU COST TRACKING (actual Moralis costs)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const CU_COSTS: Record<string, number> = {
+  getTokenTransfers: 50,
+  getTokenMetadata: 5,
+  getTokenPrice: 10,
+  getWalletTokenBalances: 25,
+  getWalletTransactions: 5,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CACHING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+const metadataCache = new Map<string, CacheEntry<TokenInfo>>();
+const priceCache = new Map<string, CacheEntry<number>>();
+const METADATA_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h for metadata
+const PRICE_CACHE_TTL = 5 * 60 * 1000; // 5min for prices
+
+function getCached<T>(cache: Map<string, CacheEntry<T>>, key: string, ttl: number): T | null {
+  const entry = cache.get(key);
+  if (entry && Date.now() - entry.timestamp < ttl) {
+    return entry.data;
+  }
+  return null;
+}
+
+function setCache<T>(cache: Map<string, CacheEntry<T>>, key: string, data: T): void {
+  cache.set(key, { data, timestamp: Date.now() });
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MULTI-KEY MANAGEMENT
@@ -14,7 +50,9 @@ import { logMoralisRequest } from "./rpc-logger";
 
 interface MoralisKey {
   index: number;
+  key: string;
   dailyRequests: number;
+  dailyCU: number;
   lastResetDay: number;
   isHealthy: boolean;
   lastError: string | null;
@@ -22,8 +60,7 @@ interface MoralisKey {
 }
 
 const DAILY_LIMIT = 40000;
-const keys: string[] = [];
-const keyHealth: MoralisKey[] = [];
+const keyPool: MoralisKey[] = [];
 let currentKeyIndex = 0;
 let initialized = false;
 
@@ -38,77 +75,102 @@ function parseKeys(): string[] {
   return [];
 }
 
-// Get next available key with quota remaining (round-robin)
-function getNextKeyIndex(): number {
+// Get next healthy key (round-robin with health check)
+function getNextKey(): MoralisKey | null {
+  if (keyPool.length === 0) return null;
+  
   const now = new Date();
   const currentDay = now.getDate();
   
-  for (let i = 0; i < keys.length; i++) {
-    const idx = (currentKeyIndex + i) % keys.length;
-    const health = keyHealth[idx];
+  // Try to find a healthy key
+  for (let i = 0; i < keyPool.length; i++) {
+    const idx = (currentKeyIndex + i) % keyPool.length;
+    const keyInfo = keyPool[idx];
     
     // Reset daily counter if new day
-    if (health.lastResetDay !== currentDay) {
-      health.dailyRequests = 0;
-      health.lastResetDay = currentDay;
-      health.isHealthy = true;
-      health.lastError = null;
+    if (keyInfo.lastResetDay !== currentDay) {
+      keyInfo.dailyRequests = 0;
+      keyInfo.dailyCU = 0;
+      keyInfo.lastResetDay = currentDay;
+      keyInfo.isHealthy = true;
+      keyInfo.lastError = null;
+      console.log(`🔄 Moralis key ${idx + 1} reset for new day`);
     }
     
-    // Check quota (95% threshold)
-    if (health.isHealthy && health.dailyRequests < DAILY_LIMIT * 0.95) {
-      currentKeyIndex = (idx + 1) % keys.length;
-      return idx;
+    // Check if key is healthy and has quota
+    if (keyInfo.isHealthy && keyInfo.dailyCU < DAILY_LIMIT * 0.95) {
+      currentKeyIndex = (idx + 1) % keyPool.length;
+      return keyInfo;
     }
   }
   
-  // All exhausted, return current anyway
-  return currentKeyIndex;
+  // All keys exhausted - return first one anyway (will fail but log properly)
+  return keyPool[0];
 }
 
-function trackRequest(keyIndex: number, success: boolean, responseTime?: number, error?: string): void {
-  const health = keyHealth[keyIndex];
-  health.dailyRequests++;
+function trackRequest(keyInfo: MoralisKey, success: boolean, responseTime: number, method: string, error?: string): void {
+  keyInfo.dailyRequests++;
+  keyInfo.dailyCU += CU_COSTS[method] || 10;
   
-  if (success && responseTime) {
-    health.avgResponseTime = health.avgResponseTime 
-      ? health.avgResponseTime * 0.8 + responseTime * 0.2 
+  if (success) {
+    keyInfo.avgResponseTime = keyInfo.avgResponseTime 
+      ? keyInfo.avgResponseTime * 0.8 + responseTime * 0.2 
       : responseTime;
   }
   
   if (!success && error) {
-    health.lastError = error;
-    if (error.includes('rate') || error.includes('limit') || error.includes('quota')) {
-      health.isHealthy = false;
+    keyInfo.lastError = error;
+    // Mark as unhealthy if quota exhausted
+    if (error.includes('consumed') || error.includes('limit') || error.includes('quota') || error.includes('401')) {
+      keyInfo.isHealthy = false;
+      console.log(`⚠️ Moralis key ${keyInfo.index + 1} marked unhealthy: ${error.slice(0, 60)}`);
     }
   }
+}
+
+export function getRemainingCU(): number {
+  return keyPool.reduce((sum, k) => {
+    if (k.isHealthy) {
+      return sum + Math.max(0, DAILY_LIMIT - k.dailyCU);
+    }
+    return sum;
+  }, 0);
+}
+
+export function getTotalCUUsed(): number {
+  return keyPool.reduce((sum, k) => sum + k.dailyCU, 0);
+}
+
+export function hasEnoughCU(method: string, calls: number = 1): boolean {
+  const needed = (CU_COSTS[method] || 10) * calls;
+  return getRemainingCU() >= needed;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const MORALIS_CHAIN_MAP: Record<string, EvmChain> = {
-  eth: EvmChain.ETHEREUM,
-  bsc: EvmChain.BSC,
+const CHAIN_IDS: Record<string, string> = {
+  eth: "0x1",
+  bsc: "0x38",
 };
 
 export async function initMoralis(): Promise<void> {
   if (initialized) return;
   
-  const parsedKeys = parseKeys();
-  if (parsedKeys.length === 0) {
+  const keys = parseKeys();
+  if (keys.length === 0) {
     console.warn("⚠️ Moralis API key not configured - some features disabled");
     return;
   }
 
-  keys.push(...parsedKeys);
   const now = new Date();
-  
   for (let i = 0; i < keys.length; i++) {
-    keyHealth.push({
+    keyPool.push({
       index: i,
+      key: keys[i],
       dailyRequests: 0,
+      dailyCU: 0,
       lastResetDay: now.getDate(),
       isHealthy: true,
       lastError: null,
@@ -116,37 +178,71 @@ export async function initMoralis(): Promise<void> {
     });
   }
 
-  // Initialize SDK with first key
-  await Moralis.start({ apiKey: keys[0] });
   initialized = true;
-  
   const totalDaily = keys.length * DAILY_LIMIT;
   console.log(`✅ Moralis initialized: ${keys.length} key(s), ${(totalDaily/1000).toFixed(0)}K CU/day total`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// API WRAPPER (with auto key rotation)
+// DIRECT REST API CALLS (with real key rotation)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function withKeyRotation<T>(operation: () => Promise<T>, method?: string): Promise<T> {
-  if (!initialized || keys.length === 0) {
-    throw new Error("Moralis not initialized");
+const BASE_URL = "https://deep-index.moralis.io/api/v2.2";
+
+async function moralisRequest<T>(
+  endpoint: string,
+  method: string,
+  params?: Record<string, string>
+): Promise<T | null> {
+  const keyInfo = getNextKey();
+  if (!keyInfo) {
+    throw new Error("No Moralis keys available");
   }
-  
-  const keyIndex = getNextKeyIndex();
+
+  const url = new URL(`${BASE_URL}${endpoint}`);
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  }
+
   const start = Date.now();
   
   try {
-    const result = await operation();
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        "Accept": "application/json",
+        "X-API-Key": keyInfo.key,
+      },
+    });
+
     const responseTime = Date.now() - start;
-    trackRequest(keyIndex, true, responseTime);
-    logMoralisRequest(keyIndex, true, responseTime, method);
-    return result;
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      trackRequest(keyInfo, false, responseTime, method, `${response.status}: ${errorText.slice(0, 100)}`);
+      logMoralisRequest(keyInfo.index, false, responseTime, method, errorText.slice(0, 80));
+      
+      // If this key failed due to quota, try next key
+      if (response.status === 401 && errorText.includes('consumed')) {
+        keyInfo.isHealthy = false;
+        // Retry with next key
+        const nextKey = getNextKey();
+        if (nextKey && nextKey.index !== keyInfo.index && nextKey.isHealthy) {
+          return moralisRequest<T>(endpoint, method, params);
+        }
+      }
+      return null;
+    }
+
+    const data = await response.json();
+    trackRequest(keyInfo, true, responseTime, method);
+    logMoralisRequest(keyInfo.index, true, responseTime, method);
+    return data as T;
   } catch (err: any) {
     const responseTime = Date.now() - start;
-    trackRequest(keyIndex, false, undefined, err?.message);
-    logMoralisRequest(keyIndex, false, responseTime, method, err?.message);
-    throw err;
+    trackRequest(keyInfo, false, responseTime, method, err?.message);
+    logMoralisRequest(keyInfo.index, false, responseTime, method, err?.message);
+    return null;
   }
 }
 
@@ -154,74 +250,79 @@ async function withKeyRotation<T>(operation: () => Promise<T>, method?: string):
 // PUBLIC API FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export async function getTokenTransfers(
+interface MoralisTransfer {
+  from_address: string;
+  to_address: string;
+  value: string;
+  block_timestamp: string;
+  block_number: string;
+  transaction_hash: string;
+}
+
+interface MoralisTransfersResponse {
+  result: MoralisTransfer[];
+  cursor?: string;
+}
+
+export async function getTokenMetadata(
   tokenAddress: string,
-  chain: ChainId,
-  fromDate?: Date
-): Promise<SwapEvent[]> {
+  chain: ChainId
+): Promise<TokenInfo> {
   await initMoralis();
-  if (!initialized) return [];
-  
-  const swaps: SwapEvent[] = [];
-  const evmChain = MORALIS_CHAIN_MAP[chain];
-  if (!evmChain) return [];
-  
-  const chainConfig = CHAINS[chain];
-  const dexRouters = new Set(chainConfig.dexRouters.map(a => a.toLowerCase()));
+  if (!initialized) return { symbol: "UNKNOWN", name: "Unknown Token", decimals: 18 };
 
-  try {
-    const response = await withKeyRotation(() => 
-      Moralis.EvmApi.token.getTokenTransfers({
-        chain: evmChain,
-        address: tokenAddress,
-        fromDate: fromDate,
-        limit: 100,
-      }),
-      "getTokenTransfers"
-    );
+  const chainId = CHAIN_IDS[chain];
+  if (!chainId) return { symbol: "UNKNOWN", name: "Unknown Token", decimals: 18 };
 
-    for (const transfer of response.result) {
-      const from = transfer.fromAddress.lowercase;
-      const to = transfer.toAddress.lowercase;
-      const amount = BigInt(transfer.value.toString());
-      const timestamp = Math.floor(new Date(transfer.blockTimestamp).getTime() / 1000);
-      const txHash = transfer.transactionHash;
+  // Check cache first
+  const cacheKey = `${chain}:${tokenAddress.toLowerCase()}`;
+  const cached = getCached(metadataCache, cacheKey, METADATA_CACHE_TTL);
+  if (cached) return cached;
 
-      if (dexRouters.has(from) && !dexRouters.has(to)) {
-        swaps.push({
-          txHash,
-          blockNumber: Number(transfer.blockNumber),
-          timestamp,
-          wallet: to,
-          tokenIn: chainConfig.wethAddress,
-          tokenOut: tokenAddress.toLowerCase(),
-          amountIn: 0n,
-          amountOut: amount,
-          isBuy: true,
-        });
-      }
+  const data = await moralisRequest<any[]>(
+    `/erc20/metadata`,
+    "getTokenMetadata",
+    { chain: chainId, addresses: tokenAddress }
+  );
 
-      if (dexRouters.has(to) && !dexRouters.has(from)) {
-        swaps.push({
-          txHash: txHash + "-sell",
-          blockNumber: Number(transfer.blockNumber),
-          timestamp,
-          wallet: from,
-          tokenIn: tokenAddress.toLowerCase(),
-          tokenOut: chainConfig.wethAddress,
-          amountIn: amount,
-          amountOut: 0n,
-          isBuy: false,
-        });
-      }
-    }
-  } catch (err: any) {
-    if (process.env.DEBUG_RPC) {
-      console.error(`Moralis error: ${err?.message}`);
-    }
+  if (data && data.length > 0) {
+    const token = data[0];
+    const result: TokenInfo = {
+      symbol: token.symbol || "UNKNOWN",
+      name: token.name || "Unknown Token",
+      decimals: Number(token.decimals) || 18,
+    };
+    setCache(metadataCache, cacheKey, result);
+    return result;
   }
 
-  return swaps;
+  return { symbol: "UNKNOWN", name: "Unknown Token", decimals: 18 };
+}
+
+export async function getTokenPrice(
+  tokenAddress: string,
+  chain: ChainId
+): Promise<number> {
+  await initMoralis();
+  if (!initialized) return 0;
+
+  const chainId = CHAIN_IDS[chain];
+  if (!chainId) return 0;
+
+  // Check cache first
+  const cacheKey = `${chain}:${tokenAddress.toLowerCase()}`;
+  const cached = getCached(priceCache, cacheKey, PRICE_CACHE_TTL);
+  if (cached !== null) return cached;
+
+  const data = await moralisRequest<any>(
+    `/erc20/${tokenAddress}/price`,
+    "getTokenPrice",
+    { chain: chainId }
+  );
+
+  const price = data?.usdPrice || 0;
+  setCache(priceCache, cacheKey, price);
+  return price;
 }
 
 export async function getWalletTokenBalance(
@@ -232,58 +333,19 @@ export async function getWalletTokenBalance(
   await initMoralis();
   if (!initialized) return 0n;
 
-  const evmChain = MORALIS_CHAIN_MAP[chain];
-  if (!evmChain) return 0n;
+  const chainId = CHAIN_IDS[chain];
+  if (!chainId) return 0n;
 
-  try {
-    const response = await withKeyRotation(() =>
-      Moralis.EvmApi.token.getWalletTokenBalances({
-        chain: evmChain,
-        address: wallet,
-        tokenAddresses: [tokenAddress],
-      }),
-      "getWalletTokenBalances"
-    );
+  const data = await moralisRequest<any[]>(
+    `/${wallet}/erc20`,
+    "getWalletTokenBalances",
+    { chain: chainId, token_addresses: tokenAddress }
+  );
 
-    if (response.result.length > 0) {
-      return BigInt(response.result[0].amount.toString());
-    }
-    return 0n;
-  } catch {
-    return 0n;
+  if (data && data.length > 0) {
+    return BigInt(data[0].balance || "0");
   }
-}
-
-export async function getTokenMetadata(
-  tokenAddress: string,
-  chain: ChainId
-): Promise<TokenInfo> {
-  await initMoralis();
-  if (!initialized) return { symbol: "UNKNOWN", name: "Unknown Token", decimals: 18 };
-
-  const evmChain = MORALIS_CHAIN_MAP[chain];
-  if (!evmChain) return { symbol: "UNKNOWN", name: "Unknown Token", decimals: 18 };
-
-  try {
-    const response = await withKeyRotation(() =>
-      Moralis.EvmApi.token.getTokenMetadata({
-        chain: evmChain,
-        addresses: [tokenAddress],
-      }),
-      "getTokenMetadata"
-    );
-
-    if (response.result.length > 0) {
-      const token = response.result[0].token;
-      return {
-        symbol: token.symbol || "UNKNOWN",
-        name: token.name || "Unknown Token",
-        decimals: Number(token.decimals) || 18,
-      };
-    }
-  } catch {}
-
-  return { symbol: "UNKNOWN", name: "Unknown Token", decimals: 18 };
+  return 0n;
 }
 
 export async function getWalletTransactionCount(
@@ -293,22 +355,16 @@ export async function getWalletTransactionCount(
   await initMoralis();
   if (!initialized) return 0;
 
-  const evmChain = MORALIS_CHAIN_MAP[chain];
-  if (!evmChain) return 0;
+  const chainId = CHAIN_IDS[chain];
+  if (!chainId) return 0;
 
-  try {
-    const response = await withKeyRotation(() =>
-      Moralis.EvmApi.transaction.getWalletTransactions({
-        chain: evmChain,
-        address: wallet,
-        limit: 100,
-      }),
-      "getWalletTransactions"
-    );
-    return response.result.length;
-  } catch {
-    return 0;
-  }
+  const data = await moralisRequest<any>(
+    `/${wallet}`,
+    "getWalletTransactions",
+    { chain: chainId, limit: "100" }
+  );
+
+  return data?.result?.length || 0;
 }
 
 export async function getWalletTokensTraded(
@@ -318,45 +374,16 @@ export async function getWalletTokensTraded(
   await initMoralis();
   if (!initialized) return 0;
 
-  const evmChain = MORALIS_CHAIN_MAP[chain];
-  if (!evmChain) return 0;
+  const chainId = CHAIN_IDS[chain];
+  if (!chainId) return 0;
 
-  try {
-    const response = await withKeyRotation(() =>
-      Moralis.EvmApi.token.getWalletTokenBalances({
-        chain: evmChain,
-        address: wallet,
-      }),
-      "getWalletTokenBalances"
-    );
-    return response.result.length;
-  } catch {
-    return 0;
-  }
-}
+  const data = await moralisRequest<any[]>(
+    `/${wallet}/erc20`,
+    "getWalletTokenBalances",
+    { chain: chainId }
+  );
 
-export async function getTokenPrice(
-  tokenAddress: string,
-  chain: ChainId
-): Promise<number> {
-  await initMoralis();
-  if (!initialized) return 0;
-
-  const evmChain = MORALIS_CHAIN_MAP[chain];
-  if (!evmChain) return 0;
-
-  try {
-    const response = await withKeyRotation(() =>
-      Moralis.EvmApi.token.getTokenPrice({
-        chain: evmChain,
-        address: tokenAddress,
-      }),
-      "getTokenPrice"
-    );
-    return response.result.usdPrice || 0;
-  } catch {
-    return 0;
-  }
+  return data?.length || 0;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -371,8 +398,8 @@ export async function fetchDexSwapsViaMoralis(
   await initMoralis();
   if (!initialized) return [];
   
-  const evmChain = MORALIS_CHAIN_MAP[chain];
-  if (!evmChain) return [];
+  const chainId = CHAIN_IDS[chain];
+  if (!chainId) return [];
   
   const fromDate = new Date(Date.now() - hoursBack * 60 * 60 * 1000);
   const swaps: SwapEvent[] = [];
@@ -384,28 +411,32 @@ export async function fetchDexSwapsViaMoralis(
 
   let cursor: string | undefined;
   let pageCount = 0;
-  const maxPages = 10;
+  const maxPages = 4;
 
   try {
     do {
-      const response = await withKeyRotation(() =>
-        Moralis.EvmApi.token.getTokenTransfers({
-          chain: evmChain,
-          address: tokenAddress,
-          fromDate: fromDate,
-          limit: 100,
-          cursor: cursor,
-        }),
-        "getTokenTransfers"
+      const params: Record<string, string> = {
+        chain: chainId,
+        from_date: fromDate.toISOString(),
+        limit: "100",
+      };
+      if (cursor) params.cursor = cursor;
+
+      const data = await moralisRequest<MoralisTransfersResponse>(
+        `/erc20/${tokenAddress}/transfers`,
+        "getTokenTransfers",
+        params
       );
 
-      for (const transfer of response.result) {
-        const from = transfer.fromAddress.lowercase;
-        const to = transfer.toAddress.lowercase;
-        const amount = BigInt(transfer.value.toString());
-        const timestamp = Math.floor(new Date(transfer.blockTimestamp).getTime() / 1000);
-        const txHash = transfer.transactionHash;
-        const blockNumber = Number(transfer.blockNumber);
+      if (!data || !data.result) break;
+
+      for (const transfer of data.result) {
+        const from = transfer.from_address.toLowerCase();
+        const to = transfer.to_address.toLowerCase();
+        const amount = BigInt(transfer.value || "0");
+        const timestamp = Math.floor(new Date(transfer.block_timestamp).getTime() / 1000);
+        const txHash = transfer.transaction_hash;
+        const blockNumber = Number(transfer.block_number);
 
         if (from === "0x0000000000000000000000000000000000000000") continue;
         if (to === "0x0000000000000000000000000000000000000000") continue;
@@ -416,7 +447,7 @@ export async function fetchDexSwapsViaMoralis(
         txTransfers.set(txHash, existing);
       }
 
-      cursor = response.pagination?.cursor;
+      cursor = data.cursor;
       pageCount++;
       
       if (cursor) await new Promise(r => setTimeout(r, 100));
@@ -465,6 +496,7 @@ export async function fetchDexSwapsViaMoralis(
           }
         }
         
+        // Detect pairs from multi-transfer txs
         if (transfers.length > 1) {
           const addressCounts = new Map<string, number>();
           for (const tr of transfers) {
@@ -480,6 +512,7 @@ export async function fetchDexSwapsViaMoralis(
       }
     }
     
+    // Second pass: detect swaps via known pairs
     for (const [txHash, transfers] of txTransfers) {
       for (const t of transfers) {
         const fromIsPair = knownPairs.has(t.from);
@@ -525,12 +558,20 @@ export async function fetchDexSwapsViaMoralis(
     }
 
   } catch (err: any) {
-    if (process.env.DEBUG_RPC) {
-      console.error(`Moralis fetchDexSwaps error: ${err?.message}`);
-    }
+    console.error(`Moralis fetchDexSwaps error: ${err?.message}`);
   }
 
   return swaps;
+}
+
+// Legacy function for compatibility
+export async function getTokenTransfers(
+  tokenAddress: string,
+  chain: ChainId,
+  fromDate?: Date
+): Promise<SwapEvent[]> {
+  return fetchDexSwapsViaMoralis(tokenAddress, chain, fromDate ? 
+    Math.ceil((Date.now() - fromDate.getTime()) / (60 * 60 * 1000)) : 72);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -538,17 +579,18 @@ export async function fetchDexSwapsViaMoralis(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export function getMoralisStatus() {
-  return keyHealth.map(h => ({
-    index: h.index,
-    healthy: h.isHealthy,
-    dailyRequests: h.dailyRequests,
+  return keyPool.map(k => ({
+    index: k.index,
+    healthy: k.isHealthy,
+    dailyRequests: k.dailyRequests,
+    dailyCU: k.dailyCU,
     dailyLimit: DAILY_LIMIT,
-    quotaUsed: `${((h.dailyRequests / DAILY_LIMIT) * 100).toFixed(1)}%`,
-    avgMs: Math.round(h.avgResponseTime),
-    error: h.lastError?.slice(0, 50),
+    cuUsed: `${((k.dailyCU / DAILY_LIMIT) * 100).toFixed(1)}%`,
+    avgMs: Math.round(k.avgResponseTime),
+    error: k.lastError?.slice(0, 50),
   }));
 }
 
 export function isMoralisConfigured(): boolean {
-  return keys.length > 0 || !!ENV.MORALIS_API_KEY || !!process.env.MORALIS_API_KEYS;
+  return keyPool.length > 0 || !!ENV.MORALIS_API_KEY || !!process.env.MORALIS_API_KEYS;
 }

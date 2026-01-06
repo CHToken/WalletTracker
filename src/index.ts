@@ -27,10 +27,17 @@ interface QueuedToken {
 }
 
 const tokenQueue: QueuedToken[] = [];
-const analyzedTokens = new Set<string>();
+const analyzedTokens = new Map<string, number>(); // key -> last analyzed timestamp
+const TOKEN_COOLDOWN_MS = 30 * 60 * 1000; // 30 min cooldown between re-analysis (saves CU)
 
 function getTokenKey(address: string, chain: ChainId): string {
   return `${chain}_${address.toLowerCase()}`;
+}
+
+function canAnalyzeToken(key: string): boolean {
+  const lastAnalyzed = analyzedTokens.get(key);
+  if (!lastAnalyzed) return true;
+  return Date.now() - lastAnalyzed > TOKEN_COOLDOWN_MS;
 }
 
 async function processQueue(): Promise<void> {
@@ -38,12 +45,12 @@ async function processQueue(): Promise<void> {
     const token = tokenQueue.shift()!;
     const key = getTokenKey(token.address, token.chain);
 
-    if (analyzedTokens.has(key)) continue;
+    if (!canAnalyzeToken(key)) continue;
 
     try {
       console.log(`\n📊 [${CHAINS[token.chain].name}] Analyzing: ${token.address}`);
       await scanTokenForAccumulators(token.address, token.chain);
-      analyzedTokens.add(key);
+      analyzedTokens.set(key, Date.now());
     } catch (err: any) {
       console.error(`Error analyzing ${token.address}:`, err?.message);
     }
@@ -114,7 +121,7 @@ async function main(): Promise<void> {
     try {
       await watchNewPairs(chain, (newToken: DiscoveredToken) => {
         const key = getTokenKey(newToken.address, newToken.chain);
-        if (!analyzedTokens.has(key)) {
+        if (canAnalyzeToken(key)) {
           tokenQueue.push({ address: newToken.address, chain: newToken.chain });
           console.log(`   Queued new token: ${newToken.address} on ${CHAINS[newToken.chain].name}`);
         }
@@ -128,16 +135,20 @@ async function main(): Promise<void> {
   console.log(`\n📋 Processing ${tokenQueue.length} tokens...`);
   await processQueue();
 
-  // Continuous re-scan
+  // Continuous re-scan (only tokens past cooldown)
   setInterval(async () => {
-    console.log(`\n🔄 Re-scanning ${analyzedTokens.size} tokens...`);
+    const eligibleTokens = Array.from(analyzedTokens.entries())
+      .filter(([key, lastTime]) => Date.now() - lastTime > TOKEN_COOLDOWN_MS);
+    
+    console.log(`\n🔄 Re-scanning ${eligibleTokens.length}/${analyzedTokens.size} tokens (${TOKEN_COOLDOWN_MS/60000}min cooldown)...`);
 
-    for (const key of analyzedTokens) {
+    for (const [key] of eligibleTokens) {
       const parts = key.split("_");
       const chain = parts[0] as ChainId;
       const address = parts[1];
       try {
         await scanTokenForAccumulators(address, chain);
+        analyzedTokens.set(key, Date.now());
       } catch (err: any) {
         console.error(`Error re-scanning ${address}:`, err?.message);
       }
@@ -150,7 +161,7 @@ async function main(): Promise<void> {
         const solTokens = await discoverSolanaTokens();
         for (const address of solTokens) {
           const key = getTokenKey(address, "sol");
-          if (!analyzedTokens.has(key)) {
+          if (canAnalyzeToken(key)) {
             tokenQueue.push({ address, chain: "sol" });
           }
         }
