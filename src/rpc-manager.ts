@@ -198,7 +198,10 @@ const PROVIDER_CONFIG = {
 
 // Public fallbacks (no API key needed)
 const PUBLIC_ENDPOINTS: Record<ChainId, string[]> = {
-  eth: ["https://cloudflare-eth.com", "https://eth.llamarpc.com"],
+  eth: [
+    "https://eth.llamarpc.com",
+    "https://ethereum.publicnode.com",
+  ],
   bsc: ["https://bsc-dataseed.binance.org", "https://bsc-dataseed1.defibit.io"],
   sol: [
     "https://api.mainnet-beta.solana.com",

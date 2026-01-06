@@ -50,8 +50,18 @@ export async function fetchSolanaSwaps(
       validateStatus: () => true,
     });
 
-    if (response.status === 200 && Array.isArray(response.data)) {
-      for (const swap of response.data) {
+    if (response.status === 200 && response.data) {
+      // Handle both array and object response formats
+      const swapsData = Array.isArray(response.data) 
+        ? response.data 
+        : (response.data.result || response.data.swaps || []);
+      
+      if (!Array.isArray(swapsData) || swapsData.length === 0) {
+        console.log("   [Solana] Swaps endpoint returned empty or unexpected format, using transfers fallback");
+        return await fetchSolanaTransfersAsFallback(tokenAddress);
+      }
+      
+      for (const swap of swapsData) {
         const walletAddress = swap.walletAddress || swap.wallet;
         const timestamp = Math.floor(new Date(swap.blockTimestamp || swap.timestamp).getTime() / 1000);
         const txHash = swap.transactionHash || swap.txHash || swap.signature;
@@ -87,6 +97,9 @@ export async function fetchSolanaSwaps(
       }
     } else {
       console.log("   [Solana] Swaps endpoint not available (" + response.status + "), using transfers fallback");
+      if (process.env.DEBUG_RPC) {
+        console.log("   [Solana] Response:", JSON.stringify(response.data).slice(0, 300));
+      }
       return await fetchSolanaTransfersAsFallback(tokenAddress);
     }
   } catch (err: any) {
