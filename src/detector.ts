@@ -26,6 +26,7 @@ import { sleep } from "./utils";
 
 // Use Moralis if configured, otherwise fall back to RPC
 const USE_MORALIS = isMoralisConfigured();
+const DEBUG = !!process.env.DEBUG_RPC;
 
 export async function detectAccumulators(
   tokenAddress: string,
@@ -53,11 +54,9 @@ export async function detectAccumulators(
   let allSwaps: SwapEvent[];
 
   if (USE_MORALIS) {
-    // Use Moralis API - much more reliable for free tiers
     console.log(`   Fetching swaps via Moralis (${CONFIG.EVALUATION_WINDOW_HOURS}h window)...`);
     allSwaps = await fetchDexSwapsViaMoralis(tokenAddress, chain, CONFIG.EVALUATION_WINDOW_HOURS);
   } else {
-    // Fall back to direct RPC (may hit rate limits on free tiers)
     const provider = await getProvider(chain);
     const currentBlock = await provider.getBlockNumber();
     const blocksPerHour = chain === "bsc" ? 1200 : 300;
@@ -107,22 +106,24 @@ export async function detectAccumulators(
 
   const validAccumulators: WalletAnalysis[] = [];
 
+  // Cache token price once per token analysis (not per buy)
+  let cachedTokenPrice: number | null = null;
+  if (USE_MORALIS) {
+    cachedTokenPrice = await getTokenPrice(tokenAddress, chain);
+  }
+
   for (const wallet of candidateWallets) {
     const swapEvents = walletBuys.get(wallet) ?? [];
 
-    // Convert SwapEvents to TokenBuys with USD values
     const buys: TokenBuy[] = [];
     let totalUSDEstimate = 0;
 
     for (const swap of swapEvents) {
-      // Calculate actual USD value from the swap transaction
       let usdValue: number;
       
-      if (USE_MORALIS) {
-        // Use Moralis token price
-        const tokenPrice = await getTokenPrice(tokenAddress, chain);
+      if (USE_MORALIS && cachedTokenPrice !== null) {
         const tokenAmountDecimal = Number(swap.amountOut) / Math.pow(10, tokenInfo.decimals);
-        usdValue = tokenAmountDecimal * tokenPrice;
+        usdValue = tokenAmountDecimal * cachedTokenPrice;
       } else {
         usdValue = await calculateSwapUSD(swap.txHash, tokenAddress, swap.amountOut, chain);
       }
@@ -139,11 +140,14 @@ export async function detectAccumulators(
         blockNumber: swap.blockNumber,
       });
 
-      await sleep(100); // Rate limit
+      await sleep(100);
     }
 
     // Quick pre-check: skip if total USD is way below threshold
     if (totalUSDEstimate < CONFIG.MIN_CUMULATIVE_USD * 0.5) {
+      if (DEBUG) {
+        console.log(`   ⏭️ ${wallet} skipped: $${totalUSDEstimate.toFixed(0)} < $${CONFIG.MIN_CUMULATIVE_USD * 0.5} threshold`);
+      }
       continue;
     }
 
@@ -154,9 +158,17 @@ export async function detectAccumulators(
       validAccumulators.push(analysis);
       console.log(`   ✅ ACCUMULATOR FOUND: ${wallet}`);
       console.log(`      Buys: ${analysis.buyCount} | Total: $${analysis.totalUSD.toFixed(2)} | Retention: ${analysis.balanceRetentionPercent}%`);
+    } else if (DEBUG) {
+      // Show why candidates failed (for debugging)
+      console.log(`   ❌ ${wallet} failed: ${analysis.failureReasons.join(', ')}`);
     }
 
-    await sleep(200); // Rate limit between wallets
+    await sleep(200);
+  }
+
+  // Summary for this token
+  if (candidateWallets.length > 0) {
+    console.log(`   📊 Result: ${validAccumulators.length}/${candidateWallets.length} candidates passed all criteria`);
   }
 
   return validAccumulators;
@@ -185,7 +197,6 @@ export async function scanTokenForAccumulators(
 export async function startAccumulationMonitor(
   tokenAddresses: { address: string; chain: ChainId }[]
 ): Promise<void> {
-  // Initialize providers for all chains
   const chains = new Set(tokenAddresses.map(t => t.chain));
   for (const chain of chains) {
     await getProvider(chain);
@@ -202,7 +213,6 @@ export async function startAccumulationMonitor(
   console.log(`   Min buys: ${CONFIG.MIN_BUY_COUNT}`);
   console.log(`   Min USD: $${CONFIG.MIN_CUMULATIVE_USD}`);
 
-  // Initial scan
   for (const { address, chain } of tokenAddresses) {
     try {
       await scanTokenForAccumulators(address, chain);
@@ -212,7 +222,6 @@ export async function startAccumulationMonitor(
     await sleep(5000);
   }
 
-  // Continuous monitoring
   setInterval(async () => {
     for (const { address, chain } of tokenAddresses) {
       try {
@@ -251,10 +260,6 @@ export async function scanOnce(tokenAddress: string, chain: ChainId = "eth"): Pr
   }
 }
 
-
-/**
- * Detect accumulators on Solana chain
- */
 async function detectSolanaAccumulators(tokenAddress: string): Promise<WalletAnalysis[]> {
   console.log(`   Using Moralis Solana API for data fetching`);
 
@@ -271,7 +276,6 @@ async function detectSolanaAccumulators(tokenAddress: string): Promise<WalletAna
     return [];
   }
 
-  // Group by wallet
   const walletBuys = new Map<string, SwapEvent[]>();
   const walletSells = new Map<string, SwapEvent[]>();
 
@@ -290,7 +294,6 @@ async function detectSolanaAccumulators(tokenAddress: string): Promise<WalletAna
 
   console.log(`   Unique wallets with buys: ${walletBuys.size}`);
 
-  // Pre-filter: wallets with minimum buy count
   const candidateWallets = Array.from(walletBuys.entries())
     .filter(([_, buys]) => buys.length >= CONFIG.MIN_BUY_COUNT)
     .map(([wallet]) => wallet);
@@ -305,8 +308,6 @@ async function detectSolanaAccumulators(tokenAddress: string): Promise<WalletAna
 
   for (const wallet of candidateWallets) {
     const swapEvents = walletBuys.get(wallet) ?? [];
-
-    // Convert SwapEvents to TokenBuys with USD values
     const buys: TokenBuy[] = [];
     let totalUSDEstimate = 0;
 
@@ -330,8 +331,10 @@ async function detectSolanaAccumulators(tokenAddress: string): Promise<WalletAna
       await sleep(50);
     }
 
-    // Quick pre-check: skip if total USD is way below threshold
     if (totalUSDEstimate < CONFIG.MIN_CUMULATIVE_USD * 0.5) {
+      if (DEBUG) {
+        console.log(`   ⏭️ ${wallet} skipped: $${totalUSDEstimate.toFixed(0)} < threshold`);
+      }
       continue;
     }
 
@@ -342,9 +345,15 @@ async function detectSolanaAccumulators(tokenAddress: string): Promise<WalletAna
       validAccumulators.push(analysis);
       console.log(`   ✅ ACCUMULATOR FOUND: ${wallet}`);
       console.log(`      Buys: ${analysis.buyCount} | Total: $${analysis.totalUSD.toFixed(2)} | Retention: ${analysis.balanceRetentionPercent}%`);
+    } else if (DEBUG) {
+      console.log(`   ❌ ${wallet} failed: ${analysis.failureReasons.join(', ')}`);
     }
 
     await sleep(200);
+  }
+
+  if (candidateWallets.length > 0) {
+    console.log(`   📊 Result: ${validAccumulators.length}/${candidateWallets.length} candidates passed all criteria`);
   }
 
   return validAccumulators;

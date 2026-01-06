@@ -6,17 +6,10 @@ import { SolNetwork } from "@moralisweb3/common-sol-utils";
 import axios from "axios";
 import { ENV, CHAINS } from "./appConfig";
 import { SwapEvent, TokenInfo } from "./types";
+import { initMoralis } from "./moralis-api";
 
-let initialized = false;
-
-export async function initMoralisSolana(): Promise<void> {
-  if (initialized) return;
-  if (!ENV.MORALIS_API_KEY) {
-    throw new Error("MORALIS_API_KEY not set in .env");
-  }
-  await Moralis.start({ apiKey: ENV.MORALIS_API_KEY });
-  initialized = true;
-}
+// Re-export for backwards compatibility - uses shared initialization
+export const initMoralisSolana = initMoralis;
 
 export async function fetchSolanaSwaps(
   tokenAddress: string,

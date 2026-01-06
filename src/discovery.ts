@@ -50,49 +50,82 @@ const BASE_TOKENS: Record<ChainId, Set<string>> = {
 const discoveredTokens = new Map<string, DiscoveredToken>();
 
 /**
- * Watch for new token pairs being created
+ * Watch for new token pairs being created (using polling instead of filters)
  */
 export async function watchNewPairs(
   chain: ChainId,
   onNewToken: (token: DiscoveredToken) => void
 ): Promise<void> {
-  const provider = await getProvider(chain);
   const factories = FACTORIES[chain];
   const baseTokens = BASE_TOKENS[chain];
 
+  if (factories.length === 0) return;
+
   console.log(`👀 [${CHAINS[chain].name}] Watching for new pairs...`);
 
-  for (const factory of factories) {
-    const filter = {
-      address: factory,
-      topics: [PAIR_CREATED_V2],
-    };
+  let lastBlock = 0;
 
-    provider.on(filter, async (log) => {
-      try {
-        const token0 = "0x" + log.topics[1].slice(26).toLowerCase();
-        const token1 = "0x" + log.topics[2].slice(26).toLowerCase();
-        const pairAddress = "0x" + log.data.slice(26, 66).toLowerCase();
-
-        const newToken = baseTokens.has(token0) ? token1 : token0;
-        const key = `${chain}_${newToken}`;
-
-        if (!baseTokens.has(newToken) && !discoveredTokens.has(key)) {
-          const discovered: DiscoveredToken = {
-            address: newToken,
-            chain,
-            pairAddress,
-            firstSeen: Date.now(),
-          };
-          discoveredTokens.set(key, discovered);
-          console.log(`🆕 [${CHAINS[chain].name}] New pair: ${newToken}`);
-          onNewToken(discovered);
-        }
-      } catch {
-        // Skip malformed logs
+  // Poll for new PairCreated events every 15 seconds
+  const poll = async () => {
+    try {
+      const provider = await getProvider(chain);
+      const currentBlock = await provider.getBlockNumber();
+      
+      if (lastBlock === 0) {
+        lastBlock = currentBlock - 10; // Start from 10 blocks back
       }
-    });
-  }
+
+      if (currentBlock <= lastBlock) return;
+
+      for (const factory of factories) {
+        try {
+          const logs = await provider.getLogs({
+            address: factory,
+            topics: [PAIR_CREATED_V2],
+            fromBlock: lastBlock + 1,
+            toBlock: currentBlock,
+          });
+
+          for (const log of logs) {
+            try {
+              const token0 = "0x" + log.topics[1].slice(26).toLowerCase();
+              const token1 = "0x" + log.topics[2].slice(26).toLowerCase();
+              const pairAddress = "0x" + log.data.slice(26, 66).toLowerCase();
+
+              const newToken = baseTokens.has(token0) ? token1 : token0;
+              const key = `${chain}_${newToken}`;
+
+              if (!baseTokens.has(newToken) && !discoveredTokens.has(key)) {
+                const discovered: DiscoveredToken = {
+                  address: newToken,
+                  chain,
+                  pairAddress,
+                  firstSeen: Date.now(),
+                };
+                discoveredTokens.set(key, discovered);
+                console.log(`🆕 [${CHAINS[chain].name}] New pair: ${newToken}`);
+                onNewToken(discovered);
+              }
+            } catch {
+              // Skip malformed logs
+            }
+          }
+        } catch {
+          // Skip failed factory queries
+        }
+      }
+
+      lastBlock = currentBlock;
+    } catch (err: any) {
+      // Silent fail - will retry next poll
+    }
+  };
+
+  // Initial poll
+  await poll();
+  
+  // Continue polling every 15 seconds
+  setInterval(poll, 15000);
 }
 
 /**

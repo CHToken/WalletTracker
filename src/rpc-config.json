@@ -1,14 +1,141 @@
 {
-  "rpcs": [
-    {
-      "name": "alchemyeth",
-      "http": "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}",
-      "ws": "wss://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+  "architecture": {
+    "description": "Multi-RPC load balancer with automatic failover and key rotation",
+    "features": [
+      "Multi-account support per provider",
+      "Weighted load balancing",
+      "Automatic failover on errors",
+      "Rate limiting per endpoint",
+      "Daily/monthly quota tracking",
+      "Zero-lag key switching",
+      "No API key exposure in logs",
+      "Request logging with stats"
+    ]
+  },
+  "providers": {
+    "alchemy": {
+      "priority": 1,
+      "chains": [
+        "eth",
+        "bsc",
+        "sol"
+      ],
+      "rateLimit": "50 req/s (500 CU/s throughput)",
+      "quota": "30M CU/month per account",
+      "websocket": true,
+      "source": "https://docs.alchemy.com/reference/compute-units",
+      "recommendation": "PRIMARY - Create 3-4 accounts"
     },
-    {
-      "name": "chainstacketh",
-      "http": "https://ethereum-mainnet.core.chainstack.com/${CHAINSTACK_API_KEY}",
-      "ws": "wss://ethereum-mainnet.core.chainstack.com/ws/${CHAINSTACK_API_KEY}"
+    "ankr": {
+      "priority": 2,
+      "chains": [
+        "eth",
+        "bsc"
+      ],
+      "rateLimit": "10 req/s (600 req/min)",
+      "quota": "200M credits/month per account",
+      "websocket": false,
+      "source": "https://api-docs.ankr.com/reference/limits",
+      "recommendation": "BACKUP for ETH/BSC - Create 2 accounts"
+    },
+    "getblock": {
+      "priority": 3,
+      "chains": [
+        "eth",
+        "bsc"
+      ],
+      "rateLimit": "20 RPS",
+      "quota": "50K CU/day per account (resets daily!)",
+      "websocket": false,
+      "source": "https://getblock.io/pricing/",
+      "recommendation": "TESTING - Create 1-2 accounts"
+    },
+    "chainstack": {
+      "priority": 4,
+      "chains": [
+        "eth",
+        "bsc",
+        "sol"
+      ],
+      "rateLimit": "25 RPS",
+      "quota": "3M RU/month per account",
+      "websocket": false,
+      "source": "https://support.chainstack.com/hc/en-us/articles/6955614349209",
+      "recommendation": "Create 3 accounts (1 per chain)"
+    },
+    "moralis": {
+      "type": "DATA_API",
+      "priority": 1,
+      "chains": [
+        "eth",
+        "bsc",
+        "sol"
+      ],
+      "quota": "40K CU/day per account (resets daily!)",
+      "source": "https://moralis.io/pricing/",
+      "recommendation": "Create 2-3 accounts for swap data"
     }
-  ]
+  },
+  "rateLimitsSummary": {
+    "alchemy": "~50 req/s (depends on method complexity)",
+    "ankr": "10 req/s",
+    "getblock": "20 req/s",
+    "chainstack": "25 req/s",
+    "nownodes": "15 req/s"
+  },
+  "chainAssignments": {
+    "eth": {
+      "primary": "alchemy",
+      "backup": [
+        "ankr",
+        "getblock",
+        "chainstack"
+      ],
+      "fallback": [
+        "cloudflare-eth",
+        "llamarpc"
+      ]
+    },
+    "bsc": {
+      "primary": "alchemy",
+      "backup": [
+        "ankr",
+        "getblock",
+        "chainstack"
+      ],
+      "fallback": [
+        "binance-public"
+      ]
+    },
+    "sol": {
+      "primary": "alchemy",
+      "backup": [
+        "chainstack"
+      ],
+      "fallback": [
+        "solana-public"
+      ],
+      "note": "Limited free options - Alchemy is best"
+    }
+  },
+  "envVariables": {
+    "multiKey": {
+      "ALCHEMY_API_KEYS": "key1,key2,key3,key4",
+      "ANKR_API_KEYS": "key1,key2",
+      "GETBLOCK_ETH_KEYS": "token1,token2",
+      "GETBLOCK_BSC_KEYS": "token1,token2",
+      "MORALIS_API_KEYS": "key1,key2,key3"
+    },
+    "singleKey": {
+      "ALCHEMY_API_KEY": "your_key",
+      "ANKR_API_KEY": "your_key",
+      "CHAINSTACK_ETH_URL": "full_url",
+      "CHAINSTACK_BSC_URL": "full_url",
+      "CHAINSTACK_SOL_URL": "full_url"
+    },
+    "debug": {
+      "DEBUG_RPC": "true (enables console logging)",
+      "LOG_RPC_TO_FILE": "true (writes to ./logs/rpc-YYYY-MM-DD.log)"
+    }
+  }
 }

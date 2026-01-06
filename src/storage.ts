@@ -63,3 +63,93 @@ export async function markAsAlerted(
     { $set: { alertedAt: new Date() } }
   );
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RATE LIMIT PERSISTENCE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface RateLimitData {
+  providerId: string;
+  dailyRequests: number;
+  monthlyRequests: number;
+  lastResetDay: number;
+  lastResetMonth: number;
+  updatedAt: Date;
+}
+
+let rateLimitsCollection: any = null;
+
+export function setRateLimitsCollection(collection: any): void {
+  rateLimitsCollection = collection;
+}
+
+export async function saveRateLimits(limits: RateLimitData[]): Promise<void> {
+  if (!rateLimitsCollection) return;
+
+  const bulkOps = limits.map(limit => ({
+    updateOne: {
+      filter: { providerId: limit.providerId },
+      update: {
+        $set: {
+          dailyRequests: limit.dailyRequests,
+          monthlyRequests: limit.monthlyRequests,
+          lastResetDay: limit.lastResetDay,
+          lastResetMonth: limit.lastResetMonth,
+          updatedAt: new Date(),
+        },
+      },
+      upsert: true,
+    },
+  }));
+
+  if (bulkOps.length > 0) {
+    await rateLimitsCollection.bulkWrite(bulkOps);
+  }
+}
+
+export async function loadRateLimits(): Promise<Map<string, RateLimitData>> {
+  const limits = new Map<string, RateLimitData>();
+  if (!rateLimitsCollection) return limits;
+
+  const now = new Date();
+  const currentDay = now.getDate();
+  const currentMonth = now.getMonth();
+
+  const docs = await rateLimitsCollection.find({}).toArray();
+  
+  for (const doc of docs) {
+    // Reset counters if day/month changed
+    let dailyRequests = doc.dailyRequests || 0;
+    let monthlyRequests = doc.monthlyRequests || 0;
+    
+    if (doc.lastResetDay !== currentDay) {
+      dailyRequests = 0;
+    }
+    if (doc.lastResetMonth !== currentMonth) {
+      monthlyRequests = 0;
+    }
+
+    limits.set(doc.providerId, {
+      providerId: doc.providerId,
+      dailyRequests,
+      monthlyRequests,
+      lastResetDay: currentDay,
+      lastResetMonth: currentMonth,
+      updatedAt: doc.updatedAt,
+    });
+  }
+
+  return limits;
+}
+
+export async function getRateLimitsSummary(): Promise<{ provider: string; daily: number; monthly: number }[]> {
+  if (!rateLimitsCollection) return [];
+
+  const docs = await rateLimitsCollection.find({}).toArray();
+  return docs.map((doc: any) => ({
+    provider: doc.providerId,
+    daily: doc.dailyRequests || 0,
+    monthly: doc.monthlyRequests || 0,
+  }));
+}

@@ -2,7 +2,14 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-import { getProvider, initMongo, getTelegramBot } from "./providers";
+import { 
+  getProvider, 
+  initMongo, 
+  initProviders,
+  getTelegramBot, 
+  printRequestStats,
+  shutdown 
+} from "./providers";
 import { scanTokenForAccumulators } from "./detector";
 import { discoverActiveTokens, watchNewPairs } from "./discovery";
 import { discoverSolanaTokens } from "./solana-api";
@@ -56,6 +63,7 @@ async function main(): Promise<void> {
   console.log("");
 
   // Initialize
+  await initProviders();
   await initMongo();
   getTelegramBot();
 
@@ -87,7 +95,7 @@ async function main(): Promise<void> {
   }
 
   // Solana (requires Moralis API key)
-  if (ENV.MORALIS_API_KEY) {
+  if (ENV.MORALIS_API_KEY || process.env.MORALIS_API_KEYS) {
     try {
       const solTokens = await discoverSolanaTokens();
       for (const address of solTokens) {
@@ -153,6 +161,9 @@ async function main(): Promise<void> {
 
     // Process any new tokens
     await processQueue();
+    
+    // Print RPC stats every scan cycle
+    printRequestStats();
 
   }, CONFIG.SCAN_INTERVAL_MS);
 
@@ -166,5 +177,7 @@ main().catch((err) => {
 
 process.once("SIGINT", () => {
   console.log("\n🛑 Shutting down...");
+  printRequestStats();
+  shutdown();
   process.exit(0);
 });
