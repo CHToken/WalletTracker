@@ -12,6 +12,35 @@ import { initMoralis, getHealthyMoralisKey } from "./moralis-api";
 export const initMoralisSolana = initMoralis;
 
 /**
+ * Safely convert amount to BigInt - handles decimal strings from Moralis
+ * Moralis sometimes returns human-readable decimals instead of raw amounts
+ */
+function safeAmountToBigInt(amount: string | number | undefined, decimals: number = 9): bigint {
+  if (!amount) return 0n;
+  
+  const amountStr = String(amount);
+  
+  // If it's already an integer string, convert directly
+  if (!amountStr.includes('.')) {
+    try {
+      return BigInt(amountStr);
+    } catch {
+      return 0n;
+    }
+  }
+  
+  // Handle decimal strings by converting to raw amount
+  try {
+    const [whole, fraction = ''] = amountStr.split('.');
+    const paddedFraction = fraction.padEnd(decimals, '0').slice(0, decimals);
+    const rawAmount = whole + paddedFraction;
+    return BigInt(rawAmount);
+  } catch {
+    return 0n;
+  }
+}
+
+/**
  * Validate Solana address format (Base58, 32-44 chars, mixed case)
  */
 function isValidSolanaAddress(address: string): boolean {
@@ -96,8 +125,8 @@ export async function fetchSolanaSwaps(
             wallet: walletAddress,
             tokenIn: swap.sold?.address || swap.tokenIn || chainConfig.wethAddress,
             tokenOut: tokenLower,
-            amountIn: BigInt(swap.sold?.amount || swap.amountIn || "0"),
-            amountOut: BigInt(swap.bought?.amount || swap.amountOut || "0"),
+            amountIn: safeAmountToBigInt(swap.sold?.amount || swap.amountIn),
+            amountOut: safeAmountToBigInt(swap.bought?.amount || swap.amountOut),
             isBuy: true,
           });
         }
@@ -109,8 +138,8 @@ export async function fetchSolanaSwaps(
             wallet: walletAddress,
             tokenIn: tokenLower,
             tokenOut: swap.bought?.address || swap.tokenOut || chainConfig.wethAddress,
-            amountIn: BigInt(swap.sold?.amount || swap.amountIn || "0"),
-            amountOut: BigInt(swap.bought?.amount || swap.amountOut || "0"),
+            amountIn: safeAmountToBigInt(swap.sold?.amount || swap.amountIn),
+            amountOut: safeAmountToBigInt(swap.bought?.amount || swap.amountOut),
             isBuy: false,
           });
         }
@@ -148,7 +177,7 @@ async function fetchSolanaTransfersAsFallback(tokenAddress: string): Promise<Swa
       for (const transfer of response.data) {
         const from = (transfer.from || transfer.fromAddress || "").toLowerCase();
         const to = (transfer.to || transfer.toAddress || "").toLowerCase();
-        const amount = BigInt(transfer.amount || transfer.value || "0");
+        const amount = safeAmountToBigInt(transfer.amount || transfer.value);
         const timestamp = Math.floor(new Date(transfer.blockTimestamp || transfer.timestamp).getTime() / 1000);
         const txHash = transfer.transactionHash || transfer.signature;
         const fromIsDex = dexPrograms.has(from);
