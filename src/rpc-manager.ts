@@ -700,8 +700,18 @@ function selectBestEndpoint(chain: ChainId, excludeIds: Set<string> = new Set())
 async function getOrCreateProvider(endpoint: ChainEndpoint): Promise<ethers.JsonRpcProvider> {
   if (!endpoint.provider) {
     const req = new FetchRequest(endpoint.url);
-    req.timeout = 30000;
-    endpoint.provider = new ethers.JsonRpcProvider(req);
+    req.timeout = 15000;
+    
+    // Use static network to avoid "failed to detect network" spam
+    // This prevents ethers from making extra calls to detect the network
+    const chain = endpoint.keyHealth.key.chains[0];
+    const staticNetwork = chain === 'eth' 
+      ? new ethers.Network('mainnet', 1n)
+      : chain === 'bsc'
+        ? new ethers.Network('bnb', 56n)
+        : undefined;
+    
+    endpoint.provider = new ethers.JsonRpcProvider(req, staticNetwork, { staticNetwork: true });
   }
   return endpoint.provider;
 }
@@ -751,6 +761,11 @@ async function checkAllEndpoints(): Promise<void> {
     const chainId = chain as ChainId;
     
     const checks = endpoints.map(async (endpoint) => {
+      // Skip endpoints that are already marked unhealthy (they have a cooldown timer)
+      if (!endpoint.keyHealth.isHealthy) {
+        return;
+      }
+      
       try {
         const start = Date.now();
         
@@ -760,6 +775,7 @@ async function checkAllEndpoints(): Promise<void> {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getSlot' }),
+            signal: AbortSignal.timeout(10000),
           });
           const data = await response.json();
           if (data.error) throw new Error(data.error.message);
@@ -770,12 +786,19 @@ async function checkAllEndpoints(): Promise<void> {
         }
         
         markSuccess(endpoint.keyHealth, Date.now() - start);
-        endpoint.keyHealth.isHealthy = true;
       } catch (err: any) {
         endpoint.keyHealth.isHealthy = false;
         endpoint.keyHealth.lastError = err?.message;
+        endpoint.keyHealth.consecutiveFailures++;
+        
+        // Set cooldown - endpoint will be re-enabled after COOLDOWN_MS
+        setTimeout(() => { 
+          endpoint.keyHealth.isHealthy = true; 
+          endpoint.keyHealth.consecutiveFailures = 0;
+        }, COOLDOWN_MS);
+        
         // Mask API key in URL for logging
-        const maskedUrl = endpoint.url.replace(/\/v2\/[^\/]+/, '/v2/***').replace(/\/[a-f0-9]{32}$/i, '/***');
+        const maskedUrl = endpoint.url.replace(/\/v2\/[^\/]+/, '/v2/***').replace(/\/[a-f0-9]{32}$/i, '/***').replace(/api-key=[^&]+/, 'api-key=***');
         failedEndpoints.push({
           id: endpoint.keyHealth.key.id,
           url: maskedUrl,
@@ -788,7 +811,7 @@ async function checkAllEndpoints(): Promise<void> {
     await Promise.allSettled(checks);
   }
   
-  // Log failed endpoints
+  // Log failed endpoints only if there are new failures
   if (failedEndpoints.length > 0) {
     console.log(`\n❌ Failed RPC endpoints:`);
     for (const failed of failedEndpoints) {

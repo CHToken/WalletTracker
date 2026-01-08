@@ -82,30 +82,37 @@ function getNextKey(): MoralisKey | null {
   const now = new Date();
   const currentDay = now.getDate();
   
-  // Try to find a healthy key
-  for (let i = 0; i < keyPool.length; i++) {
-    const idx = (currentKeyIndex + i) % keyPool.length;
-    const keyInfo = keyPool[idx];
-    
-    // Reset daily counter if new day
+  // First pass: reset daily counters if needed
+  for (const keyInfo of keyPool) {
     if (keyInfo.lastResetDay !== currentDay) {
       keyInfo.dailyRequests = 0;
       keyInfo.dailyCU = 0;
       keyInfo.lastResetDay = currentDay;
       keyInfo.isHealthy = true;
       keyInfo.lastError = null;
-      console.log(`🔄 Moralis key ${idx + 1} reset for new day`);
+      console.log(`🔄 Moralis key ${keyInfo.index + 1} reset for new day`);
     }
+  }
+  
+  // Second pass: find a healthy key with quota
+  const startIdx = currentKeyIndex;
+  for (let i = 0; i < keyPool.length; i++) {
+    const idx = (startIdx + i) % keyPool.length;
+    const keyInfo = keyPool[idx];
     
-    // Check if key is healthy and has quota
-    if (keyInfo.isHealthy && keyInfo.dailyCU < DAILY_LIMIT * 0.95) {
+    // Skip unhealthy keys entirely
+    if (!keyInfo.isHealthy) continue;
+    
+    // Check if key has quota remaining
+    if (keyInfo.dailyCU < DAILY_LIMIT * 0.95) {
       currentKeyIndex = (idx + 1) % keyPool.length;
       return keyInfo;
     }
   }
   
-  // All keys exhausted - return first one anyway (will fail but log properly)
-  return keyPool[0];
+  // All keys exhausted or unhealthy
+  console.warn(`⚠️ All Moralis keys exhausted or unhealthy`);
+  return null;
 }
 
 function trackRequest(keyInfo: MoralisKey, success: boolean, responseTime: number, method: string, error?: string): void {
