@@ -1,5 +1,5 @@
 // src/detector.ts
-import { CONFIG, ChainId, CHAINS } from "./appConfig";
+import { CONFIG, ChainId, CHAINS, isChainEnabled } from "./appConfig";
 import { TokenBuy, WalletAnalysis, SwapEvent } from "./types";
 import { getProvider, initMongo, getTelegramBot } from "./providers";
 import {
@@ -33,6 +33,13 @@ export async function detectAccumulators(
   chain: ChainId = "eth"
 ): Promise<WalletAnalysis[]> {
   const chainName = CHAINS[chain].name;
+
+  // Check if chain is enabled
+  if (!isChainEnabled(chain)) {
+    console.log(`\n⏭️ [${chainName}] Skipped - chain disabled in config`);
+    return [];
+  }
+
   console.log(`\n🔍 [${chainName}] Analyzing: ${tokenAddress}`);
 
   // Handle Solana separately
@@ -46,7 +53,7 @@ export async function detectAccumulators(
     console.log(`   Using Moralis API for data fetching`);
   }
 
-  const tokenInfo = USE_MORALIS 
+  const tokenInfo = USE_MORALIS
     ? await getTokenMetadata(tokenAddress, chain)
     : await getTokenInfo(tokenAddress, chain);
   console.log(`   Token: ${tokenInfo.name} (${tokenInfo.symbol})`);
@@ -120,14 +127,14 @@ export async function detectAccumulators(
 
     for (const swap of swapEvents) {
       let usdValue: number;
-      
+
       if (USE_MORALIS && cachedTokenPrice !== null) {
         const tokenAmountDecimal = Number(swap.amountOut) / Math.pow(10, tokenInfo.decimals);
         usdValue = tokenAmountDecimal * cachedTokenPrice;
       } else {
         usdValue = await calculateSwapUSD(swap.txHash, tokenAddress, swap.amountOut, chain);
       }
-      
+
       totalUSDEstimate += usdValue;
 
       buys.push({
@@ -203,7 +210,7 @@ export async function startAccumulationMonitor(
   for (const chain of chains) {
     await getProvider(chain);
   }
-  
+
   await initMongo();
   getTelegramBot();
 

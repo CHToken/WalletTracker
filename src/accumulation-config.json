@@ -1,32 +1,38 @@
 {
     "thresholds": {
-        "minBuyCount": 3,
-        "minCumulativeUSD": 8000,
-        "preCheckThresholdPercent": 80,
+        "minBuyCount": 2,
+        "minCumulativeUSD": 2000,
+        "preCheckThresholdPercent": 60,
         "minBuySpacingMinutes": 5,
         "maxBuysPerHour": 2,
         "noSellHours": 24,
         "minBalanceRetentionPercent": 50,
         "maxUniqueTokensTraded": 5,
-        "maxTotalTrades": 100,
+        "maxTotalTrades": 500,
         "maxTxPerDay": 100,
         "evaluationWindowHours": 72,
         "scanIntervalMinutes": 5
     },
     "productionThresholds": {
-        "minBuyCount": 5,
-        "minCumulativeUSD": 10000,
-        "preCheckThresholdPercent": 50,
+        "minBuyCount": 2,
+        "minCumulativeUSD": 3000,
+        "preCheckThresholdPercent": 60,
         "minBuySpacingMinutes": 10,
         "maxBuysPerHour": 3,
         "noSellHours": 72,
         "minBalanceRetentionPercent": 90,
         "maxUniqueTokensTraded": 5,
-        "maxTotalTrades": 100,
+        "maxTotalTrades": 500,
         "maxTxPerDay": 50
+    },
+    "chains": {
+        "eth": true,
+        "bsc": false,
+        "sol": true
     },
     "_comments": {
         "maxUniqueTokensTraded": "Max OTHER tokens wallet has swapped on DEX - max 5",
-        "maxTotalTrades": "Max total wallet transactions - max 100"
+        "maxTotalTrades": "Max total wallet transactions - max 500",
+        "chains": "Enable/disable chains - set to false to turn off"
     }
 }

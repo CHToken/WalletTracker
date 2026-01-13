@@ -108,6 +108,11 @@ interface AccumulationConfig {
     evaluationWindowHours?: number;
     scanIntervalMinutes?: number;
   };
+  chains?: {
+    eth?: boolean;
+    bsc?: boolean;
+    sol?: boolean;
+  };
 }
 
 function loadConfig(): AccumulationConfig {
@@ -122,6 +127,7 @@ function loadConfig(): AccumulationConfig {
 
 const fileConfig = loadConfig();
 const t = fileConfig.thresholds || {};
+const c = fileConfig.chains || {};
 
 export const CONFIG = {
   EVALUATION_WINDOW_HOURS: t.evaluationWindowHours ?? 72,
@@ -133,10 +139,21 @@ export const CONFIG = {
   NO_SELL_HOURS: t.noSellHours ?? 72,
   MIN_BALANCE_RETENTION_PERCENT: t.minBalanceRetentionPercent ?? 90,
   MAX_UNIQUE_TOKENS_TRADED: t.maxUniqueTokensTraded ?? 5,
-  MAX_TOTAL_TRADES: t.maxTotalTrades ?? 100,
+  MAX_TOTAL_TRADES: t.maxTotalTrades ?? 500,
   MAX_TX_PER_DAY: t.maxTxPerDay ?? 50,
   SCAN_INTERVAL_MS: (t.scanIntervalMinutes ?? 5) * 60 * 1000,
 };
+
+// Chain enable/disable flags
+export const ENABLED_CHAINS = {
+  eth: c.eth ?? true,
+  bsc: c.bsc ?? true,
+  sol: c.sol ?? true,
+};
+
+export function isChainEnabled(chain: ChainId): boolean {
+  return ENABLED_CHAINS[chain] ?? true;
+}
 
 // Known exchange deposit addresses to exclude
 export const EXCHANGE_ADDRESSES = new Set([
